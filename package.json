@@ -10,13 +10,14 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
-    "@heroicons/vue": "^2.1.1",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
+    "@heroicons/vue": "^2.1.1",
     "nuxt": "^3.10.3"
   },
   "devDependencies": {
     "@nuxtjs/tailwindcss": "^6.11.4",
+    "@nuxtjs/vercel-builder": "^0.25.0",
     "@types/node": "^20.11.19",
     "typescript": "^5.3.3",
     "vitest": "^1.2.2"
