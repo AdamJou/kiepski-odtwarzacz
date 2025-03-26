@@ -55,16 +55,6 @@ npm run generate
 npm run build
 ```
 
-## Hosting
-
-Aplikacja może być hostowana na różnych platformach:
-
-- **Vercel** - Zalecany dla aplikacji Nuxt
-- **Netlify** - Dobre rozwiązanie dla stron statycznych
-- **GitHub Pages** - Po zbudowaniu jako statyczna strona
-- **Cloudflare Pages** - Z obsługą CDN
-
 ## Uwagi
 
-- Pliki wideo muszą być hostowane gdzie indziej (np. na publicznym GitHub, Cloudinary)
 - Funkcja przycinania wideo działa w przeglądarce dzięki FFmpeg skompilowanym do WebAssembly
