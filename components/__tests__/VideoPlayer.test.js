@@ -20,12 +20,10 @@ describe("VideoPlayer", () => {
   ];
 
   beforeEach(() => {
-    // Mock HTMLMediaElement methods that are not implemented in JSDOM
     window.HTMLMediaElement.prototype.play = vi.fn();
     window.HTMLMediaElement.prototype.pause = vi.fn();
     window.HTMLMediaElement.prototype.load = vi.fn();
 
-    // Reset mocks before each test
     vi.clearAllMocks();
 
     wrapper = mount(VideoPlayer, {
