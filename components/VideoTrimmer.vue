@@ -433,14 +433,30 @@ const downloadSnippet = async () => {
     progress.value = 0;
     status.value = "Preparing video...";
 
-    const stream = (
+    const videoWidth = previewVideo.value.videoWidth;
+    const videoHeight = previewVideo.value.videoHeight;
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    canvas.width = videoWidth;
+    canvas.height = videoHeight;
+
+    const stream = canvas.captureStream(30);
+    const videoTrack = (
       previewVideo.value as HTMLVideoElement & {
-        captureStream: (fps: number) => MediaStream;
+        captureStream: () => MediaStream;
       }
-    ).captureStream(30); // 30 FPS
+    )
+      .captureStream()
+      .getVideoTracks()[0];
+
+    const [track] = stream.getVideoTracks();
+    stream.removeTrack(track);
+    stream.addTrack(videoTrack);
+
     const mediaRecorder = new MediaRecorder(stream, {
       mimeType: "video/webm;codecs=h264",
-      videoBitsPerSecond: 8000000, // 8 Mbps
+      videoBitsPerSecond: 8000000,
     });
 
     const chunks: Blob[] = [];
@@ -459,7 +475,7 @@ const downloadSnippet = async () => {
       a.download = `trimmed_${formatTime(startTime.value, true)}-${formatTime(
         endTime.value,
         true
-      )}.mp4`;
+      )}.webm`;
       a.click();
       URL.revokeObjectURL(url);
 
@@ -469,10 +485,10 @@ const downloadSnippet = async () => {
     };
 
     mediaRecorder.start();
-    status.value = "Zapisywanie...";
+    status.value = "Recording...";
 
     previewVideo.value.currentTime = startTime.value;
-    previewVideo.value.play();
+    await previewVideo.value.play();
 
     const updateProgress = () => {
       if (!previewVideo.value) return;
@@ -486,6 +502,7 @@ const downloadSnippet = async () => {
         requestAnimationFrame(updateProgress);
       } else {
         mediaRecorder.stop();
+        previewVideo.value.pause();
       }
     };
 
@@ -495,6 +512,9 @@ const downloadSnippet = async () => {
     status.value = "Error processing video. Please try again.";
     isProcessing.value = false;
     progress.value = 0;
+    if (previewVideo.value) {
+      previewVideo.value.pause();
+    }
   }
 };
 
