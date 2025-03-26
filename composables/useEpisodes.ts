@@ -5,15 +5,22 @@ interface Episode {
   url: string;
 }
 
+interface EpisodeMetadata {
+  duration: number;
+  thumbnails?: string[];
+}
+
 export const useEpisodes = () => {
   const episodes = ref<Episode[]>([]);
   const playlist = ref<Episode[]>([]);
   const isLoading = ref(false);
 
+  // Add caching for thumbnails and video metadata
+  const episodeCache = ref<Map<string, EpisodeMetadata>>(new Map());
+
   const loadEpisodes = async () => {
     isLoading.value = true;
     try {
-      // Using the full URL to ensure proper loading
       const response = await fetch("/kiepscy.txt", {
         headers: {
           Accept: "text/plain",
@@ -26,7 +33,6 @@ export const useEpisodes = () => {
 
       const text = await response.text();
 
-      // Parse the text file
       const lines = text.split("\n");
       const parsedEpisodes: Episode[] = [];
 
@@ -39,7 +45,7 @@ export const useEpisodes = () => {
               title: line,
               url: nextLine,
             });
-            i++; // Skip the URL line in next iteration
+            i++;
           }
         }
       }
@@ -47,7 +53,6 @@ export const useEpisodes = () => {
       episodes.value = parsedEpisodes;
     } catch (error) {
       console.error("Error loading episodes:", error);
-      // Add some error handling UI feedback
       episodes.value = [];
     } finally {
       isLoading.value = false;
@@ -68,6 +73,24 @@ export const useEpisodes = () => {
     playlist.value = [];
   };
 
+  const cacheThumbnails = (url: string, thumbnails: string[]) => {
+    const metadata = episodeCache.value.get(url) || { duration: 0 };
+    episodeCache.value.set(url, { ...metadata, thumbnails });
+  };
+
+  const getCachedThumbnails = (url: string): string[] | undefined => {
+    return episodeCache.value.get(url)?.thumbnails;
+  };
+
+  const cacheEpisodeMetadata = (url: string, duration: number) => {
+    const metadata = episodeCache.value.get(url) || {};
+    episodeCache.value.set(url, { ...metadata, duration });
+  };
+
+  const getEpisodeMetadata = (url: string): EpisodeMetadata | undefined => {
+    return episodeCache.value.get(url);
+  };
+
   return {
     episodes,
     playlist,
@@ -76,5 +99,10 @@ export const useEpisodes = () => {
     addToPlaylist,
     removeFromPlaylist,
     clearPlaylist,
+    cacheThumbnails,
+    getCachedThumbnails,
+    cacheEpisodeMetadata,
+    getEpisodeMetadata,
+    episodeCache,
   };
 };
