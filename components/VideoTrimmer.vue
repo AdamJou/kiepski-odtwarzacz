@@ -260,8 +260,7 @@ const generateThumbnails = async () => {
 
   const cachedThumbnails = getCachedThumbnails(props.videoUrl);
   if (cachedThumbnails && cachedThumbnails.length > 0) {
-    console.log("Używam miniatur z pamięci podręcznej");
-    thumbnails.value = cachedThumbnails;
+    thumbnails.value = [...cachedThumbnails];
     return;
   }
 
@@ -278,35 +277,25 @@ const generateThumbnails = async () => {
   canvas.width = 160;
   canvas.height = 90;
 
-  thumbnails.value = [];
   const newThumbnails: string[] = [];
-
   const wasPlaying = isPlaying.value;
-  let currentPlaybackTime = 0;
-
-  try {
-    currentPlaybackTime = previewVideo.value.currentTime;
-  } catch (error) {
-    console.error("Error getting current time:", error);
-  }
+  const currentPlaybackTime = previewVideo.value.currentTime;
 
   if (isPlaying.value) {
-    try {
-      await previewVideo.value.pause();
-      isPlaying.value = false;
-    } catch (error) {
-      console.error("Error pausing video:", error);
-    }
+    await previewVideo.value.pause();
+    isPlaying.value = false;
   }
 
   const batchSize = 5;
+  const duration = previewVideo.value?.duration || 0;
+  const interval = duration / (numThumbnails - 1);
+
   for (let batch = 0; batch < numThumbnails; batch += batchSize) {
     const batchPromises: Promise<string>[] = [];
 
     for (let i = 0; i < batchSize && batch + i < numThumbnails; i++) {
       const index = batch + i;
-      const time =
-        (index * (previewVideo.value?.duration || 0)) / numThumbnails;
+      const time = index * interval;
 
       batchPromises.push(
         (async () => {
@@ -338,25 +327,20 @@ const generateThumbnails = async () => {
     const batchResults = await Promise.all(batchPromises);
     newThumbnails.push(...batchResults);
     thumbnails.value = [...newThumbnails];
-
     thumbnailProgress.value = Math.round(
       (newThumbnails.length / numThumbnails) * 100
     );
-    await new Promise((resolve) => setTimeout(resolve, 0)); // Let UI update
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
   cacheThumbnails(props.videoUrl, newThumbnails);
 
-  try {
-    if (previewVideo.value && Number.isFinite(currentPlaybackTime)) {
-      previewVideo.value.currentTime = currentPlaybackTime;
-      if (wasPlaying) {
-        await previewVideo.value.play();
-        isPlaying.value = true;
-      }
+  if (previewVideo.value && Number.isFinite(currentPlaybackTime)) {
+    previewVideo.value.currentTime = currentPlaybackTime;
+    if (wasPlaying) {
+      await previewVideo.value.play();
+      isPlaying.value = true;
     }
-  } catch (error) {
-    console.error("Error restoring playback state:", error);
   }
 
   isGeneratingThumbnails.value = false;

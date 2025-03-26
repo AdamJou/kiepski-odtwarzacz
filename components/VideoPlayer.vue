@@ -192,23 +192,18 @@ const playVideo = (index: number) => {
       videoDuration.value = metadata.duration;
     }
 
-    setTimeout(() => {
-      if (videoPlayer.value) {
-        videoPlayer.value.load();
-        const playPromise = videoPlayer.value.play();
-
-        if (playPromise !== undefined) {
-          playPromise
-            .then(() => {
-              playerStatus.value = "Odtwarzanie";
-            })
-            .catch((error) => {
-              console.error("Błąd odtwarzania:", error);
-              playerStatus.value = "Błąd odtwarzania";
-            });
-        }
-      }
-    }, 100);
+    if (videoPlayer.value) {
+      videoPlayer.value.load();
+      videoPlayer.value
+        .play()
+        .then(() => {
+          playerStatus.value = "Odtwarzanie";
+        })
+        .catch((error) => {
+          console.error("Błąd odtwarzania:", error);
+          playerStatus.value = "Błąd odtwarzania";
+        });
+    }
   }
 };
 
@@ -229,17 +224,15 @@ const removeFromPlaylist = (episode: Episode) => {
   emit("remove", episode);
 
   if (isCurrentEpisode && props.playlist.length > 0) {
-    setTimeout(() => {
-      if (currentIndex.value >= props.playlist.length) {
-        currentIndex.value = Math.max(0, props.playlist.length - 1);
-        if (props.playlist.length > 0) {
-          playVideo(currentIndex.value);
-        } else {
-          currentVideo.value = null;
-          videoLoaded.value = false;
-        }
+    if (currentIndex.value >= props.playlist.length) {
+      currentIndex.value = Math.max(0, props.playlist.length - 1);
+      if (props.playlist.length > 0) {
+        playVideo(currentIndex.value);
+      } else {
+        currentVideo.value = null;
+        videoLoaded.value = false;
       }
-    }, 0);
+    }
   }
 };
 
