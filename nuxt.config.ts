@@ -2,10 +2,10 @@ import { defineNuxtConfig } from "nuxt/config";
 
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
-  devtools: { enabled: true },
-  test: true,
+  devtools: { enabled: false },
 
   nitro: {
+    preset: "vercel",
     serveStatic: true,
   },
 
@@ -21,7 +21,7 @@ export default defineNuxtConfig({
           content:
             'Odtwarzacz odcinków serialu "Świat według Kiepskich" z funkcją przycinania fragmentów.',
         },
-        { name: "theme-color", content: "#92400e" }, // Kolor motywu (amber-800)
+        { name: "theme-color", content: "#15803d" }, // Kolor motywu (green-700)
         { property: "og:title", content: "Kiepski Odtwarzacz" },
         {
           property: "og:description",
@@ -32,12 +32,6 @@ export default defineNuxtConfig({
       ],
       link: [{ rel: "icon", type: "image/x-icon", href: "/favicon.ico" }],
     },
-  },
-
-  compatibilityDate: "2025-03-26",
-
-  vite: {
-    plugins: [require("@vitejs/plugin-vue")],
   },
 
   modules: ["@nuxtjs/tailwindcss"],
