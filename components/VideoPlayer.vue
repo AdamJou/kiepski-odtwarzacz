@@ -30,22 +30,6 @@
       </video>
     </div>
 
-    <div
-      class="debug-info bg-amber-900/40 p-2 mb-4 rounded text-xs text-amber-100"
-      v-if="debugMode"
-    >
-      <p>Status wideo: {{ playerStatus }}</p>
-      <p>URL: {{ currentVideo?.url }}</p>
-      <p>Indeks: {{ currentIndex }}</p>
-      <p>Playlista: {{ playlist.length }} elementów</p>
-      <button
-        @click="forceReload"
-        class="px-2 py-1 bg-amber-700 text-white rounded mt-2 hover:bg-amber-600 transition-colors"
-      >
-        Wymuś przeładowanie
-      </button>
-    </div>
-
     <div class="fixed-controls">
       <div class="playback-controls">
         <button
@@ -149,7 +133,6 @@ const currentIndex = ref(0);
 const currentVideo = ref<Episode | null>(null);
 const videoDuration = ref(0);
 const playerStatus = ref("Nie załadowano");
-const debugMode = ref(false);
 const showTrimmer = ref(false);
 const videoLoaded = ref(false);
 
@@ -242,16 +225,6 @@ const handleMetadataLoaded = () => {
     videoDuration.value = videoPlayer.value.duration;
 
     cacheEpisodeMetadata(currentVideo.value.url, videoPlayer.value.duration);
-  }
-};
-
-const forceReload = () => {
-  if (videoPlayer.value && currentVideo.value) {
-    videoLoaded.value = false;
-    videoPlayer.value.load();
-    setTimeout(() => {
-      videoPlayer.value?.play();
-    }, 100);
   }
 };
 
@@ -361,7 +334,6 @@ onMounted(() => {
   background-color: rgb(146, 64, 14);
 }
 
-/* Dostosuj styl dla małych ekranów */
 @media (max-width: 640px) {
   .video-player {
     padding: 8px;
@@ -383,7 +355,6 @@ onMounted(() => {
   }
 }
 
-/* Niestandardowy scrollbar dla spójności z głównym układem */
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: rgba(217, 119, 6, 0.5) rgba(0, 0, 0, 0.2);

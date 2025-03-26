@@ -156,8 +156,6 @@
       </div>
       <p>{{ status }}</p>
     </div>
-
-    <canvas ref="canvas" style="display: none"></canvas>
   </div>
 </template>
 
@@ -188,9 +186,7 @@ const currentTime = ref(0);
 const isProcessing = ref(false);
 const progress = ref(0);
 const status = ref("");
-const ffmpeg = ref<FFmpeg | null>(null);
 const previewVideo = ref<HTMLVideoElement | null>(null);
-const canvas = ref<HTMLCanvasElement | null>(null);
 const isPlaying = ref(false);
 const thumbnails = ref<string[]>([]);
 const numThumbnails = 20;
@@ -230,7 +226,6 @@ const initFFmpeg = async () => {
     });
 
     console.log("FFmpeg loaded successfully");
-    ffmpeg.value = ffmpegInstance;
   } catch (error) {
     console.error("Error initializing FFmpeg:", error);
     status.value = "Failed to initialize video processor. Please try again.";
@@ -871,7 +866,6 @@ onUnmounted(() => {
   transition: width 0.3s ease;
 }
 
-/* Responsywność dla urządzeń mobilnych */
 @media (max-width: 768px) {
   .video-trimmer {
     padding: 5px;
@@ -963,12 +957,10 @@ onUnmounted(() => {
     right: -8px;
   }
 
-  /* Make thumbnails more touch-friendly */
   .thumbnail:hover {
     transform: scale(1.5) translateY(-10px);
   }
 
-  /* Adjust spacing for better touch targets */
   .range-controls {
     height: 50px;
     padding: 0 8px;
@@ -987,7 +979,6 @@ onUnmounted(() => {
   }
 }
 
-/* Additional styles for very small screens */
 @media (max-width: 380px) {
   .time-markers {
     font-size: 0.7em;
