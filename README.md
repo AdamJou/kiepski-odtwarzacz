@@ -66,5 +66,4 @@ Aplikacja może być hostowana na różnych platformach:
 
 ## Uwagi
 
-- Pliki wideo muszą być hostowane gdzie indziej (np. na publicznym GitHub, Cloudinary)
 - Funkcja przycinania wideo działa w przeglądarce dzięki FFmpeg skompilowanym do WebAssembly
