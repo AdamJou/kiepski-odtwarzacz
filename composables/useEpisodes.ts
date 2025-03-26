@@ -1,4 +1,4 @@
-import { ref } from "vue";
+import { ref, computed } from "vue";
 
 interface Episode {
   title: string;
@@ -14,25 +14,20 @@ export const useEpisodes = () => {
   const episodes = ref<Episode[]>([]);
   const playlist = ref<Episode[]>([]);
   const isLoading = ref(false);
-
-  // Add caching for thumbnails and video metadata
   const episodeCache = ref<Map<string, EpisodeMetadata>>(new Map());
 
   const loadEpisodes = async () => {
+    if (isLoading.value) return;
     isLoading.value = true;
     try {
       const response = await fetch("/kiepscy.txt", {
-        headers: {
-          Accept: "text/plain",
-        },
+        headers: { Accept: "text/plain" },
       });
 
-      if (!response.ok) {
+      if (!response.ok)
         throw new Error(`HTTP error! status: ${response.status}`);
-      }
 
       const text = await response.text();
-
       const lines = text.split("\n");
       const parsedEpisodes: Episode[] = [];
 
@@ -40,11 +35,8 @@ export const useEpisodes = () => {
         const line = lines[i].trim();
         if (line && !line.startsWith("http")) {
           const nextLine = lines[i + 1]?.trim();
-          if (nextLine && nextLine.startsWith("http")) {
-            parsedEpisodes.push({
-              title: line,
-              url: nextLine,
-            });
+          if (nextLine?.startsWith("http")) {
+            parsedEpisodes.push({ title: line, url: nextLine });
             i++;
           }
         }
@@ -60,7 +52,7 @@ export const useEpisodes = () => {
   };
 
   const addToPlaylist = (episode: Episode) => {
-    if (!playlist.value.find((e) => e.url === episode.url)) {
+    if (!playlist.value.some((e) => e.url === episode.url)) {
       playlist.value.push(episode);
     }
   };
