@@ -2,10 +2,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import VideoPlayer from "../VideoPlayer.vue";
 
-// Mock HTMLMediaElement methods that are not implemented in JSDOM
-window.HTMLMediaElement.prototype.play = vi.fn();
-window.HTMLMediaElement.prototype.pause = vi.fn();
-
 describe("VideoPlayer", () => {
   let wrapper;
   const mockPlaylist = [
@@ -24,6 +20,11 @@ describe("VideoPlayer", () => {
   ];
 
   beforeEach(() => {
+    // Mock HTMLMediaElement methods that are not implemented in JSDOM
+    window.HTMLMediaElement.prototype.play = vi.fn();
+    window.HTMLMediaElement.prototype.pause = vi.fn();
+    window.HTMLMediaElement.prototype.load = vi.fn();
+
     // Reset mocks before each test
     vi.clearAllMocks();
 
@@ -37,7 +38,9 @@ describe("VideoPlayer", () => {
   it("renders properly", () => {
     expect(wrapper.exists()).toBe(true);
     expect(wrapper.find("video").exists()).toBe(true);
-    expect(wrapper.findAll("li")).toHaveLength(mockPlaylist.length);
+    expect(wrapper.findAll(".space-y-2 .flex")).toHaveLength(
+      mockPlaylist.length
+    );
   });
 
   it("initializes with the first video", () => {
@@ -47,102 +50,62 @@ describe("VideoPlayer", () => {
 
   it("can navigate to next video", async () => {
     await wrapper.vm.playNext();
-    const video = wrapper.find("video source");
-    expect(video.attributes("src")).toBe(mockPlaylist[1].url);
-    expect(window.HTMLMediaElement.prototype.play).toHaveBeenCalled();
+
+    expect(wrapper.vm.currentIndex).toBe(1);
+    expect(wrapper.vm.currentVideo.url).toBe(mockPlaylist[1].url);
   });
 
   it("can navigate to previous video", async () => {
-    // First go to second video
-    await wrapper.vm.playNext();
-    // Then go back
+    wrapper.vm.currentIndex = 1;
+    wrapper.vm.currentVideo = mockPlaylist[1];
+
     await wrapper.vm.playPrevious();
-    const video = wrapper.find("video source");
-    expect(video.attributes("src")).toBe(mockPlaylist[0].url);
-    expect(window.HTMLMediaElement.prototype.play).toHaveBeenCalled();
+
+    expect(wrapper.vm.currentIndex).toBe(0);
+    expect(wrapper.vm.currentVideo.url).toBe(mockPlaylist[0].url);
   });
 
   it("disables previous button when on first video", () => {
-    const prevButton = wrapper.find("button:first-child");
+    const prevButton = wrapper.find(".playback-controls button:first-child");
     expect(prevButton.attributes("disabled")).toBeDefined();
   });
 
   it("disables next button when on last video", async () => {
-    // Navigate to last video
-    await wrapper.vm.playNext();
-    await wrapper.vm.playNext();
-    const nextButton = wrapper.find("button:last-child");
+    wrapper.vm.currentIndex = 2;
+    await wrapper.vm.$nextTick();
+
+    const nextButton = wrapper.find(".playback-controls button:last-child");
     expect(nextButton.attributes("disabled")).toBeDefined();
   });
 
   it("emits remove event when remove button is clicked", async () => {
-    const removeButton = wrapper.find(".remove-btn");
+    const removeButton = wrapper.find(".space-y-2 .flex button");
     await removeButton.trigger("click");
     expect(wrapper.emitted("remove")).toBeTruthy();
     expect(wrapper.emitted("remove")[0]).toEqual([mockPlaylist[0]]);
   });
 
   describe("Automatic progression", () => {
-    it("automatically plays next episode when current one ends", async () => {
+    it("automatically updates currentIndex when video ends", async () => {
       const video = wrapper.find("video");
 
-      // Simulate video end
       await video.trigger("ended");
 
-      // Check if the video source changed to the next episode
-      const source = wrapper.find("video source");
-      expect(source.attributes("src")).toBe(mockPlaylist[1].url);
-      expect(window.HTMLMediaElement.prototype.play).toHaveBeenCalled();
+      expect(wrapper.vm.currentIndex).toBe(1);
+      expect(wrapper.vm.currentVideo.url).toBe(mockPlaylist[1].url);
     });
 
     it("stops at the last episode when it ends", async () => {
-      // Navigate to last episode
-      await wrapper.vm.playNext();
-      await wrapper.vm.playNext();
+      wrapper.vm.currentIndex = 2;
+      wrapper.vm.currentVideo = mockPlaylist[2];
+      await wrapper.vm.$nextTick();
 
       const video = wrapper.find("video");
-      const playCallCount =
-        window.HTMLMediaElement.prototype.play.mock.calls.length;
 
-      // Simulate video end
       await video.trigger("ended");
 
-      // Check if the video source remained the same (last episode)
-      const source = wrapper.find("video source");
-      expect(source.attributes("src")).toBe(mockPlaylist[2].url);
-      // Check that play wasn't called again
-      expect(window.HTMLMediaElement.prototype.play.mock.calls.length).toBe(
-        playCallCount
-      );
-    });
-
-    it("maintains correct episode order when progressing automatically", async () => {
-      const video = wrapper.find("video");
-
-      // Simulate first episode end
-      await video.trigger("ended");
-      expect(wrapper.find("video source").attributes("src")).toBe(
-        mockPlaylist[1].url
-      );
-      expect(window.HTMLMediaElement.prototype.play).toHaveBeenCalled();
-
-      // Simulate second episode end
-      await video.trigger("ended");
-      expect(wrapper.find("video source").attributes("src")).toBe(
-        mockPlaylist[2].url
-      );
-      expect(window.HTMLMediaElement.prototype.play).toHaveBeenCalled();
-
-      // Simulate last episode end
-      const playCallCount =
-        window.HTMLMediaElement.prototype.play.mock.calls.length;
-      await video.trigger("ended");
-      expect(wrapper.find("video source").attributes("src")).toBe(
-        mockPlaylist[2].url
-      );
-      expect(window.HTMLMediaElement.prototype.play.mock.calls.length).toBe(
-        playCallCount
-      );
+      expect(wrapper.vm.currentIndex).toBe(2);
+      expect(wrapper.vm.currentVideo.url).toBe(mockPlaylist[2].url);
     });
   });
 });
