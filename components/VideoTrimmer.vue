@@ -161,9 +161,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from "vue";
-import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile } from "@ffmpeg/util";
-import { toBlobURL } from "@ffmpeg/util";
+
 import { useEpisodes } from "../composables/useEpisodes";
 import {
   PlayIcon,
@@ -202,36 +200,6 @@ const {
   cacheEpisodeMetadata,
   getEpisodeMetadata,
 } = useEpisodes();
-
-const initFFmpeg = async () => {
-  try {
-    const ffmpegInstance = new FFmpeg();
-    console.log("Created FFmpeg instance");
-
-    ffmpegInstance.on("log", ({ message }) => {
-      console.log("FFmpeg Log:", message);
-    });
-
-    ffmpegInstance.on("progress", ({ progress: p }) => {
-      console.log("FFmpeg Progress:", p);
-      progress.value = Math.round(p * 100);
-    });
-
-    console.log("Loading FFmpeg...");
-
-    await ffmpegInstance.load({
-      coreURL: "/ffmpeg/ffmpeg-core.js",
-      wasmURL: "/ffmpeg/ffmpeg-core.wasm",
-      workerURL: "/ffmpeg/ffmpeg-core.worker.js",
-    });
-
-    console.log("FFmpeg loaded successfully");
-  } catch (error) {
-    console.error("Error initializing FFmpeg:", error);
-    status.value = "Failed to initialize video processor. Please try again.";
-    throw error;
-  }
-};
 
 const formatTime = (seconds: number, showDecimals = false) => {
   if (isNaN(seconds) || !isFinite(seconds)) return "00:00";
@@ -428,54 +396,51 @@ const previewSnippet = async () => {
 const downloadSnippet = async () => {
   if (!previewVideo.value || isProcessing.value) return;
 
+  // (A) Upewnij się, że przeglądarka wspiera MP4 w MediaRecorder
+  const mp4Mime = "video/mp4;codecs=avc1.42E01E,mp4a.40.2";
+  if (!MediaRecorder.isTypeSupported(mp4Mime)) {
+    alert("Ta przeglądarka nie obsługuje nagrywania MP4 przez MediaRecorder.");
+    return;
+  }
+
   try {
     isProcessing.value = true;
     progress.value = 0;
-    status.value = "Preparing video...";
+    status.value = "Nagrywanie snippet do MP4...";
 
-    const videoWidth = previewVideo.value.videoWidth;
-    const videoHeight = previewVideo.value.videoHeight;
-
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    canvas.width = videoWidth;
-    canvas.height = videoHeight;
-
-    const stream = canvas.captureStream(30);
-    const videoTrack = (
+    // (B) captureStream – w zależności od przeglądarki może wymagać cast
+    //    Twój canvas + zamiana tracków z oryginalnego wideo nie jest tu potrzebna,
+    //    bo i tak jest "przechwytywany" obraz z <video>.
+    const stream = (
       previewVideo.value as HTMLVideoElement & {
-        captureStream: () => MediaStream;
+        captureStream: (fps?: number) => MediaStream;
       }
-    )
-      .captureStream()
-      .getVideoTracks()[0];
+    ).captureStream(30);
 
-    const [track] = stream.getVideoTracks();
-    stream.removeTrack(track);
-    stream.addTrack(videoTrack);
-
-    const mediaRecorder = new MediaRecorder(stream, {
-      mimeType: "video/webm;codecs=h264",
-      videoBitsPerSecond: 8000000,
+    // (C) MediaRecorder -> .mp4
+    const recorder = new MediaRecorder(stream, {
+      mimeType: mp4Mime,
+      videoBitsPerSecond: 5_000_000, // np. 5 Mbps
     });
 
     const chunks: Blob[] = [];
-
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        chunks.push(event.data);
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        chunks.push(e.data);
       }
     };
 
-    mediaRecorder.onstop = () => {
-      const blob = new Blob(chunks, { type: "video/webm" });
-      const url = URL.createObjectURL(blob);
+    recorder.onstop = () => {
+      // (D) Mamy nagrany plik MP4
+      const mp4Blob = new Blob(chunks, { type: mp4Mime });
+      const url = URL.createObjectURL(mp4Blob);
+
       const a = document.createElement("a");
       a.href = url;
       a.download = `trimmed_${formatTime(startTime.value, true)}-${formatTime(
         endTime.value,
         true
-      )}.webm`;
+      )}.mp4`;
       a.click();
       URL.revokeObjectURL(url);
 
@@ -484,29 +449,31 @@ const downloadSnippet = async () => {
       progress.value = 100;
     };
 
-    mediaRecorder.start();
-    status.value = "Recording...";
+    // (E) Rozpocznij nagrywanie
+    recorder.start();
 
+    status.value = "Recording snippet...";
+
+    // (F) Przewiń wideo do startTime i odtwórz do endTime
     previewVideo.value.currentTime = startTime.value;
     await previewVideo.value.play();
 
-    const updateProgress = () => {
+    // (G) Kontrola postępu i zatrzymanie nagrywania
+    function updateProgress() {
       if (!previewVideo.value) return;
-      const currentProgress =
-        ((previewVideo.value.currentTime - startTime.value) /
-          (endTime.value - startTime.value)) *
-        100;
-      progress.value = Math.min(100, Math.max(0, currentProgress));
+      const current = previewVideo.value.currentTime;
+      const duration = endTime.value - startTime.value;
+      const ratio = (current - startTime.value) / duration;
+      progress.value = Math.min(100, Math.max(0, ratio * 100));
 
-      if (previewVideo.value.currentTime < endTime.value) {
-        requestAnimationFrame(updateProgress);
-      } else {
-        mediaRecorder.stop();
+      if (current >= endTime.value) {
         previewVideo.value.pause();
+        recorder.stop();
+      } else {
+        requestAnimationFrame(updateProgress);
       }
-    };
-
-    updateProgress();
+    }
+    requestAnimationFrame(updateProgress);
   } catch (error) {
     console.error("Error processing video:", error);
     status.value = "Error processing video. Please try again.";
@@ -580,15 +547,6 @@ const adjustEndTime = (adjustment: number) => {
     }
   }
 };
-
-onMounted(async () => {
-  console.log("Component mounted, initializing FFmpeg");
-  try {
-    await initFFmpeg();
-  } catch (error) {
-    console.error("Failed to initialize FFmpeg on mount:", error);
-  }
-});
 
 onUnmounted(() => {
   if (previewVideo.value) {
