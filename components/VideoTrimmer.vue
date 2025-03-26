@@ -7,7 +7,12 @@
         :src="videoUrl"
         @timeupdate="handleTimeUpdate"
         @loadedmetadata="handleMetadataLoaded"
+        @error="(e) => console.error('Video error:', e)"
+        @waiting="() => (isPlaying = false)"
+        @playing="() => (isPlaying = true)"
+        @pause="() => (isPlaying = false)"
         crossorigin="anonymous"
+        preload="metadata"
       ></video>
       <div class="preview-controls">
         <button @click="togglePlayback" class="control-btn">
@@ -19,6 +24,13 @@
           {{ formatTime(previewVideo?.duration || 0) }}
         </div>
       </div>
+    </div>
+
+    <div v-if="isGeneratingThumbnails" class="processing-status">
+      <div class="progress-bar">
+        <div :style="{ width: `${thumbnailProgress}%` }" class="progress"></div>
+      </div>
+      <p>Generowanie... {{ thumbnailProgress }}%</p>
     </div>
 
     <div v-if="isSnippetMode" class="timeline-container">
@@ -64,7 +76,7 @@
             type="range"
             :min="0"
             :max="previewVideo?.duration || 100"
-            :step="0.1"
+            :step="0.01"
             v-model.number="startTime"
             class="slider start-slider"
             @input="handleStartChange"
@@ -74,7 +86,7 @@
             type="range"
             :min="0"
             :max="previewVideo?.duration || 100"
-            :step="0.1"
+            :step="0.01"
             v-model.number="endTime"
             class="slider end-slider"
             @input="handleEndChange"
@@ -84,9 +96,29 @@
       </div>
 
       <div class="time-markers">
-        <span>{{ formatTime(startTime) }}</span>
-        <span>Długość: {{ formatTime(endTime - startTime) }}</span>
-        <span>{{ formatTime(endTime) }}</span>
+        <div class="time-control">
+          <div class="time-adjust-buttons">
+            <button @click="adjustStartTime(-0.5)" class="time-adjust-btn">
+              -0.5s
+            </button>
+            <span>{{ formatTime(startTime, true) }}</span>
+            <button @click="adjustStartTime(0.5)" class="time-adjust-btn">
+              +0.5s
+            </button>
+          </div>
+        </div>
+        <span>Długość: {{ formatTime(endTime - startTime, false) }}</span>
+        <div class="time-control">
+          <div class="time-adjust-buttons">
+            <button @click="adjustEndTime(-0.5)" class="time-adjust-btn">
+              -0.5s
+            </button>
+            <span>{{ formatTime(endTime, true) }}</span>
+            <button @click="adjustEndTime(0.5)" class="time-adjust-btn">
+              +0.5s
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="controls">
@@ -125,7 +157,6 @@
       <p>{{ status }}</p>
     </div>
 
-    <!-- Hidden canvas for video processing -->
     <canvas ref="canvas" style="display: none"></canvas>
   </div>
 </template>
@@ -135,6 +166,7 @@ import { ref, watch, onMounted, onUnmounted } from "vue";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
 import { toBlobURL } from "@ffmpeg/util";
+import { useEpisodes } from "../composables/useEpisodes";
 import {
   PlayIcon,
   PauseIcon,
@@ -165,19 +197,25 @@ const numThumbnails = 20;
 const mediaRecorder = ref<MediaRecorder | null>(null);
 const recordedChunks = ref<Blob[]>([]);
 const isSnippetMode = ref(false);
+const isGeneratingThumbnails = ref(false);
+const thumbnailProgress = ref(0);
 
-// Initialize FFmpeg
+const {
+  cacheThumbnails,
+  getCachedThumbnails,
+  cacheEpisodeMetadata,
+  getEpisodeMetadata,
+} = useEpisodes();
+
 const initFFmpeg = async () => {
   try {
     const ffmpegInstance = new FFmpeg();
     console.log("Created FFmpeg instance");
 
-    // Configure logging
     ffmpegInstance.on("log", ({ message }) => {
       console.log("FFmpeg Log:", message);
     });
 
-    // Configure progress tracking
     ffmpegInstance.on("progress", ({ progress: p }) => {
       console.log("FFmpeg Progress:", p);
       progress.value = Math.round(p * 100);
@@ -185,7 +223,6 @@ const initFFmpeg = async () => {
 
     console.log("Loading FFmpeg...");
 
-    // Load FFmpeg with proxied URLs
     await ffmpegInstance.load({
       coreURL: "/ffmpeg/ffmpeg-core.js",
       wasmURL: "/ffmpeg/ffmpeg-core.wasm",
@@ -201,68 +238,150 @@ const initFFmpeg = async () => {
   }
 };
 
-// Format time in MM:SS format
-const formatTime = (seconds: number) => {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.round(seconds % 60);
-  return `${mins.toString().padStart(2, "0")}:${secs
+const formatTime = (seconds: number, showDecimals = false) => {
+  if (isNaN(seconds) || !isFinite(seconds)) return "00:00";
+
+  const mins = Math.floor(Math.max(0, seconds) / 60);
+  const secs = Math.max(0, seconds) % 60;
+
+  if (showDecimals) {
+    return `${String(mins).padStart(2, "0")}:${secs
+      .toFixed(2)
+      .padStart(5, "0")}`;
+  }
+
+  return `${String(mins).padStart(2, "0")}:${Math.round(secs)
     .toString()
     .padStart(2, "0")}`;
 };
 
-// Generate thumbnails
 const generateThumbnails = async () => {
   if (!previewVideo.value) return;
 
+  const cachedThumbnails = getCachedThumbnails(props.videoUrl);
+  if (cachedThumbnails && cachedThumbnails.length > 0) {
+    console.log("Używam miniatur z pamięci podręcznej");
+    thumbnails.value = cachedThumbnails;
+    return;
+  }
+
+  isGeneratingThumbnails.value = true;
+  thumbnailProgress.value = 0;
+
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
-  if (!ctx) return;
+  if (!ctx) {
+    isGeneratingThumbnails.value = false;
+    return;
+  }
 
   canvas.width = 160;
   canvas.height = 90;
 
   thumbnails.value = [];
+  const newThumbnails: string[] = [];
 
-  for (let i = 0; i < numThumbnails; i++) {
-    const time = (i * previewVideo.value.duration) / numThumbnails;
-    previewVideo.value.currentTime = time;
+  const wasPlaying = isPlaying.value;
+  let currentPlaybackTime = 0;
 
-    await new Promise((resolve) => {
-      previewVideo.value!.addEventListener("seeked", resolve, { once: true });
-    });
+  try {
+    currentPlaybackTime = previewVideo.value.currentTime;
+  } catch (error) {
+    console.error("Error getting current time:", error);
+  }
 
-    ctx.drawImage(previewVideo.value, 0, 0, canvas.width, canvas.height);
+  if (isPlaying.value) {
     try {
-      thumbnails.value.push(canvas.toDataURL("image/jpeg", 0.7));
+      await previewVideo.value.pause();
+      isPlaying.value = false;
     } catch (error) {
-      console.error("Error generating thumbnail:", error);
-      // Add a placeholder thumbnail
-      thumbnails.value.push(
-        "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDABQODxIPDRQSEBIXFRQdHx4eHRoaHSQtJSAyVC08MTY3LjIyOUFTRjo/Tj4yMkhiSk46NjU1PVBVXWRkXWyEhIf/2wBDARUXFx4aHjshITtBNkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUH/wAARCAAIAAoDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAb/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k="
-      );
+      console.error("Error pausing video:", error);
     }
   }
+
+  const batchSize = 5;
+  for (let batch = 0; batch < numThumbnails; batch += batchSize) {
+    const batchPromises: Promise<string>[] = [];
+
+    for (let i = 0; i < batchSize && batch + i < numThumbnails; i++) {
+      const index = batch + i;
+      const time =
+        (index * (previewVideo.value?.duration || 0)) / numThumbnails;
+
+      batchPromises.push(
+        (async () => {
+          try {
+            if (previewVideo.value && Number.isFinite(time)) {
+              previewVideo.value.currentTime = time;
+              await new Promise((resolve) => {
+                previewVideo.value!.addEventListener("seeked", resolve, {
+                  once: true,
+                });
+              });
+              ctx.drawImage(
+                previewVideo.value,
+                0,
+                0,
+                canvas.width,
+                canvas.height
+              );
+              return canvas.toDataURL("image/jpeg", 0.7);
+            }
+          } catch (error) {
+            console.error("Error generating thumbnail:", error);
+          }
+          return "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDABQODxIPDRQSEBIXFRQdHx4eHRoaHSQtJSAyVC08MTY3LjIyOUFTRjo/Tj4yMkhiSk46NjU1PVBVXWRkXWyEhIf/2wBDARUXFx4aHjshITtBNkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUH/wAARCAAIAAoDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAb/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k=";
+        })()
+      );
+    }
+
+    const batchResults = await Promise.all(batchPromises);
+    newThumbnails.push(...batchResults);
+    thumbnails.value = [...newThumbnails];
+
+    thumbnailProgress.value = Math.round(
+      (newThumbnails.length / numThumbnails) * 100
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0)); // Let UI update
+  }
+
+  cacheThumbnails(props.videoUrl, newThumbnails);
+
+  try {
+    if (previewVideo.value && Number.isFinite(currentPlaybackTime)) {
+      previewVideo.value.currentTime = currentPlaybackTime;
+      if (wasPlaying) {
+        await previewVideo.value.play();
+        isPlaying.value = true;
+      }
+    }
+  } catch (error) {
+    console.error("Error restoring playback state:", error);
+  }
+
+  isGeneratingThumbnails.value = false;
 };
 
-// Handle video metadata loaded
 const handleMetadataLoaded = () => {
   if (!previewVideo.value) return;
 
   const videoDur = previewVideo.value.duration;
+  if (!videoDur || isNaN(videoDur)) return;
 
-  // Inicjalizujemy zakresy wycinania
+  cacheEpisodeMetadata(props.videoUrl, videoDur);
+
   startTime.value = 0;
   endTime.value = videoDur;
 
-  // Opóźnij generowanie miniatur, żeby dać czas na ustawienie sliderów
   setTimeout(() => {
-    generateThumbnails();
+    if (previewVideo.value && previewVideo.value.readyState >= 2) {
+      generateThumbnails();
+    }
   }, 500);
 };
 
-// Handle time update
 const handleTimeUpdate = () => {
-  if (!previewVideo.value) return;
+  if (!previewVideo.value || isNaN(previewVideo.value.currentTime)) return;
 
   currentTime.value = previewVideo.value.currentTime;
 
@@ -272,47 +391,54 @@ const handleTimeUpdate = () => {
   }
 };
 
-// Toggle playback
-const togglePlayback = () => {
+const togglePlayback = async () => {
   if (!previewVideo.value) return;
 
-  if (isPlaying.value) {
-    previewVideo.value.pause();
-  } else {
-    previewVideo.value.play();
+  try {
+    if (isPlaying.value) {
+      await previewVideo.value.pause();
+    } else {
+      const playPromise = previewVideo.value.play();
+      if (playPromise !== undefined) {
+        await playPromise;
+      }
+    }
+    isPlaying.value = !isPlaying.value;
+  } catch (error) {
+    console.error("Playback error:", error);
+    isPlaying.value = false;
   }
-  isPlaying.value = !isPlaying.value;
 };
 
-// Seek to specific time
 const seekToTime = (time: number) => {
-  if (!previewVideo.value) return;
-  previewVideo.value.currentTime = time;
+  if (!previewVideo.value || isNaN(time)) return;
+
+  try {
+    const validTime = Math.max(0, Math.min(time, previewVideo.value.duration));
+    previewVideo.value.currentTime = validTime;
+  } catch (error) {
+    console.error("Seek error:", error);
+  }
 };
 
-// Seek to start
 const seekToStart = () => {
   seekToTime(startTime.value);
 };
 
-// Seek to end
 const seekToEnd = () => {
   seekToTime(endTime.value);
 };
 
-// Handle start time change
 const handleStartChange = () => {
   if (!previewVideo.value) return;
   previewVideo.value.currentTime = startTime.value;
 };
 
-// Handle end time change
 const handleEndChange = () => {
   if (!previewVideo.value) return;
   previewVideo.value.currentTime = endTime.value;
 };
 
-// Preview the selected snippet
 const previewSnippet = async () => {
   if (!previewVideo.value) return;
   previewVideo.value.currentTime = startTime.value;
@@ -320,7 +446,6 @@ const previewSnippet = async () => {
   isPlaying.value = true;
 };
 
-// Download the trimmed video snippet
 const downloadSnippet = async () => {
   if (!previewVideo.value || isProcessing.value) return;
 
@@ -329,7 +454,6 @@ const downloadSnippet = async () => {
     progress.value = 0;
     status.value = "Preparing video...";
 
-    // Create a MediaRecorder with high quality settings
     const stream = (
       previewVideo.value as HTMLVideoElement & {
         captureStream: (fps: number) => MediaStream;
@@ -337,7 +461,7 @@ const downloadSnippet = async () => {
     ).captureStream(30); // 30 FPS
     const mediaRecorder = new MediaRecorder(stream, {
       mimeType: "video/webm;codecs=h264",
-      videoBitsPerSecond: 8000000, // 8 Mbps for high quality
+      videoBitsPerSecond: 8000000, // 8 Mbps
     });
 
     const chunks: Blob[] = [];
@@ -349,14 +473,13 @@ const downloadSnippet = async () => {
     };
 
     mediaRecorder.onstop = () => {
-      // Create a blob with WebM data but save it as MP4
       const blob = new Blob(chunks, { type: "video/webm" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      // Save with .mp4 extension even though it's WebM inside
-      a.download = `trimmed_${formatTime(startTime.value)}-${formatTime(
-        endTime.value
+      a.download = `trimmed_${formatTime(startTime.value, true)}-${formatTime(
+        endTime.value,
+        true
       )}.mp4`;
       a.click();
       URL.revokeObjectURL(url);
@@ -366,15 +489,12 @@ const downloadSnippet = async () => {
       progress.value = 100;
     };
 
-    // Start recording
     mediaRecorder.start();
     status.value = "Zapisywanie...";
 
-    // Seek to start time and play
     previewVideo.value.currentTime = startTime.value;
     previewVideo.value.play();
 
-    // Update progress
     const updateProgress = () => {
       if (!previewVideo.value) return;
       const currentProgress =
@@ -399,7 +519,6 @@ const downloadSnippet = async () => {
   }
 };
 
-// Ensure end time is always greater than start time
 watch(startTime, (newValue) => {
   if (newValue >= endTime.value) {
     startTime.value = endTime.value - 1;
@@ -412,7 +531,6 @@ watch(endTime, (newValue) => {
   }
 });
 
-// Toggle snippet mode
 const toggleSnippetMode = () => {
   isSnippetMode.value = !isSnippetMode.value;
   if (isSnippetMode.value && previewVideo.value) {
@@ -421,7 +539,46 @@ const toggleSnippetMode = () => {
       currentTime.value + 30,
       previewVideo.value.duration
     );
-    generateThumbnails();
+    if (!getCachedThumbnails(props.videoUrl)) {
+      generateThumbnails();
+    } else {
+      thumbnails.value = getCachedThumbnails(props.videoUrl)!;
+    }
+  }
+};
+
+const adjustStartTime = (adjustment: number) => {
+  if (!previewVideo.value || isNaN(adjustment)) return;
+
+  const newTime = startTime.value + adjustment;
+  if (newTime >= 0 && newTime < endTime.value) {
+    startTime.value = Number(newTime.toFixed(2));
+    if (previewVideo.value) {
+      try {
+        previewVideo.value.currentTime = startTime.value;
+      } catch (error) {
+        console.error("Error adjusting start time:", error);
+      }
+    }
+  }
+};
+
+const adjustEndTime = (adjustment: number) => {
+  if (!previewVideo.value || isNaN(adjustment)) return;
+
+  const newTime = endTime.value + adjustment;
+  if (
+    newTime > startTime.value &&
+    newTime <= (previewVideo.value?.duration || 0)
+  ) {
+    endTime.value = Number(newTime.toFixed(2));
+    if (previewVideo.value) {
+      try {
+        previewVideo.value.currentTime = endTime.value;
+      } catch (error) {
+        console.error("Error adjusting end time:", error);
+      }
+    }
   }
 };
 
@@ -436,12 +593,28 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (previewVideo.value) {
-    previewVideo.value.pause();
-    previewVideo.value.src = "";
+    try {
+      previewVideo.value.pause();
+      previewVideo.value.removeAttribute("src");
+      previewVideo.value.load();
+    } catch (error) {
+      console.error("Error cleaning up video:", error);
+    }
   }
+
   if (mediaRecorder.value && mediaRecorder.value.state !== "inactive") {
-    mediaRecorder.value.stop();
+    try {
+      mediaRecorder.value.stop();
+    } catch (error) {
+      console.error("Error stopping media recorder:", error);
+    }
   }
+
+  thumbnails.value = [];
+  currentTime.value = 0;
+  isPlaying.value = false;
+  isProcessing.value = false;
+  isGeneratingThumbnails.value = false;
 });
 </script>
 
@@ -648,6 +821,7 @@ onUnmounted(() => {
 .time-markers {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   font-family: monospace;
   font-size: 0.9em;
   color: rgba(251, 191, 36, 0.9);
@@ -734,21 +908,124 @@ onUnmounted(() => {
   }
 
   .time-markers {
-    font-size: 0.8em;
+    font-size: 0.75em;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .time-control {
+    width: 100%;
+  }
+
+  .time-adjust-buttons {
+    width: 100%;
+    justify-content: space-between;
+    padding: 0 10px;
+  }
+
+  .time-adjust-btn {
+    padding: 4px 8px;
+    font-size: 0.85em;
+    min-width: 50px;
+    text-align: center;
   }
 
   .action-btn {
-    padding: 6px 12px;
-    font-size: 0.8em;
+    padding: 8px 12px;
+    font-size: 0.9em;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .controls {
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
   }
 
   .control-btn {
-    width: 32px;
-    height: 32px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .preview-controls {
+    padding: 10px;
   }
 
   .time-display {
-    font-size: 0.9em;
+    font-size: 0.85em;
+  }
+
+  .slider::-webkit-slider-thumb {
+    width: 24px;
+    height: 24px;
+  }
+
+  .slider::-moz-range-thumb {
+    width: 24px;
+    height: 24px;
+  }
+
+  .selection-handle {
+    width: 16px;
+  }
+
+  .start-handle {
+    left: -8px;
+  }
+
+  .end-handle {
+    right: -8px;
+  }
+
+  /* Make thumbnails more touch-friendly */
+  .thumbnail:hover {
+    transform: scale(1.5) translateY(-10px);
+  }
+
+  /* Adjust spacing for better touch targets */
+  .range-controls {
+    height: 50px;
+    padding: 0 8px;
+  }
+
+  .slider {
+    height: 30px;
+  }
+
+  .slider::-webkit-slider-runnable-track {
+    height: 6px;
+  }
+
+  .slider::-moz-range-track {
+    height: 6px;
+  }
+}
+
+/* Additional styles for very small screens */
+@media (max-width: 380px) {
+  .time-markers {
+    font-size: 0.7em;
+  }
+
+  .time-adjust-btn {
+    padding: 3px 6px;
+    min-width: 45px;
+  }
+
+  .action-btn {
+    padding: 6px 10px;
+    font-size: 0.85em;
+  }
+
+  .preview-controls {
+    padding: 8px;
+  }
+
+  .control-btn {
+    width: 36px;
+    height: 36px;
   }
 }
 
@@ -756,5 +1033,32 @@ onUnmounted(() => {
   display: inline-block;
   font-size: 18px;
   margin-right: 6px;
+}
+
+.time-control {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.time-adjust-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.time-adjust-btn {
+  background: rgba(180, 83, 9, 0.7);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 0.8em;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.time-adjust-btn:hover {
+  background: rgba(217, 119, 6, 0.8);
 }
 </style>
