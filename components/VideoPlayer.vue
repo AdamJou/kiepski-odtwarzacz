@@ -1,12 +1,26 @@
 <template>
   <div class="video-player">
     <div class="relative aspect-video bg-black rounded-lg overflow-hidden mb-4">
+      <div
+        v-if="!videoLoaded && currentVideo"
+        class="absolute inset-0 flex items-center justify-center bg-black/80 z-10"
+      >
+        <div class="flex flex-col items-center">
+          <div
+            class="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-600 mb-4"
+          ></div>
+          <p class="text-amber-100">Ładowanie filmu...</p>
+        </div>
+      </div>
+
       <video
         ref="videoPlayer"
         class="w-full h-full"
         controls
         @ended="playNext"
         @loadedmetadata="handleMetadataLoaded"
+        @canplay="handleVideoLoaded"
+        @error="handleVideoError"
         preload="metadata"
       >
         <source v-if="currentVideo" :src="currentVideo.url" type="video/mp4" />
@@ -115,6 +129,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from "vue";
 import VideoTrimmer from "./VideoTrimmer.vue";
+import { useEpisodes } from "../composables/useEpisodes";
 
 interface Episode {
   title: string;
@@ -134,27 +149,52 @@ const currentIndex = ref(0);
 const currentVideo = ref<Episode | null>(null);
 const videoDuration = ref(0);
 const playerStatus = ref("Nie załadowano");
-const debugMode = ref(false); // Ustaw na true, aby zobaczyć informacje debugowania
-const showTrimmer = ref(false); // Kontroluje widoczność komponentu VideoTrimmer
+const debugMode = ref(false);
+const showTrimmer = ref(false);
+const videoLoaded = ref(false);
+
+const { getEpisodeMetadata, cacheEpisodeMetadata } = useEpisodes();
 
 const toggleTrimmer = () => {
   showTrimmer.value = !showTrimmer.value;
 
-  // Jeśli włączamy trimmer, możemy chcieć zatrzymać wideo
   if (showTrimmer.value && videoPlayer.value) {
     videoPlayer.value.pause();
   }
+};
+
+const handleVideoLoaded = () => {
+  videoLoaded.value = true;
+  playerStatus.value = "Załadowano";
+
+  if (currentVideo.value && videoPlayer.value) {
+    cacheEpisodeMetadata(currentVideo.value.url, videoPlayer.value.duration);
+  }
+};
+
+const handleVideoError = () => {
+  videoLoaded.value = false;
+  playerStatus.value = `Błąd: ${
+    videoPlayer.value?.error?.message || "Nieznany błąd"
+  }`;
 };
 
 const playVideo = (index: number) => {
   if (index >= 0 && index < props.playlist.length) {
     currentIndex.value = index;
     currentVideo.value = props.playlist[index];
+    videoLoaded.value = false;
 
-    // Poczekaj, aż interfejs się zaktualizuje
+    const metadata = currentVideo.value
+      ? getEpisodeMetadata(currentVideo.value.url)
+      : null;
+    if (metadata) {
+      videoDuration.value = metadata.duration;
+    }
+
     setTimeout(() => {
       if (videoPlayer.value) {
-        videoPlayer.value.load(); // Wymuś przeładowanie źródła
+        videoPlayer.value.load();
         const playPromise = videoPlayer.value.play();
 
         if (playPromise !== undefined) {
@@ -189,7 +229,6 @@ const removeFromPlaylist = (episode: Episode) => {
   emit("remove", episode);
 
   if (isCurrentEpisode && props.playlist.length > 0) {
-    // Jeśli usunięto aktualnie odtwarzany element, odtwórz pierwszy dostępny
     setTimeout(() => {
       if (currentIndex.value >= props.playlist.length) {
         currentIndex.value = Math.max(0, props.playlist.length - 1);
@@ -197,6 +236,7 @@ const removeFromPlaylist = (episode: Episode) => {
           playVideo(currentIndex.value);
         } else {
           currentVideo.value = null;
+          videoLoaded.value = false;
         }
       }
     }, 0);
@@ -204,14 +244,17 @@ const removeFromPlaylist = (episode: Episode) => {
 };
 
 const handleMetadataLoaded = () => {
-  if (videoPlayer.value) {
+  if (videoPlayer.value && currentVideo.value) {
     playerStatus.value = "Załadowano metadane";
     videoDuration.value = videoPlayer.value.duration;
+
+    cacheEpisodeMetadata(currentVideo.value.url, videoPlayer.value.duration);
   }
 };
 
 const forceReload = () => {
   if (videoPlayer.value && currentVideo.value) {
+    videoLoaded.value = false;
     videoPlayer.value.load();
     setTimeout(() => {
       videoPlayer.value?.play();
@@ -219,15 +262,20 @@ const forceReload = () => {
   }
 };
 
-// Obserwuj zmiany w playliście
+watch(currentVideo, (newVideo) => {
+  if (newVideo) {
+    videoLoaded.value = false;
+  }
+});
+
 watch(
   () => props.playlist,
   (newPlaylist) => {
     if (newPlaylist.length > 0 && !currentVideo.value) {
-      // Jeśli mamy elementy na liście, ale nic nie jest odtwarzane, odtwórz pierwszy element
       playVideo(0);
     } else if (newPlaylist.length === 0) {
       currentVideo.value = null;
+      videoLoaded.value = false;
     }
   },
   { deep: true }
@@ -244,6 +292,7 @@ onMounted(() => {
       playerStatus.value = `Błąd: ${
         videoPlayer.value?.error?.message || "Nieznany błąd"
       }`;
+      videoLoaded.value = false;
       console.error("Błąd wideo:", e);
     });
 
@@ -253,6 +302,7 @@ onMounted(() => {
 
     videoPlayer.value.addEventListener("playing", () => {
       playerStatus.value = "Odtwarzanie";
+      videoLoaded.value = true;
     });
 
     videoPlayer.value.addEventListener("pause", () => {
