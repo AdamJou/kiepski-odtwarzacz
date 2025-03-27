@@ -1,16 +1,27 @@
 import { defineNuxtConfig } from "nuxt/config";
 
-// https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
   devtools: { enabled: false },
 
   nitro: {
     preset: "vercel",
     serveStatic: true,
+    routeRules: {
+      "/trim/**": {
+        headers: {
+          "Cross-Origin-Opener-Policy": "same-origin",
+          "Cross-Origin-Embedder-Policy": "require-corp",
+        },
+      },
+    },
   },
 
   app: {
     baseURL: "/",
+    pageTransition: {
+      name: "slide-left",
+      mode: "out-in",
+    },
     head: {
       title: "Kiepski Odtwarzacz - Świat według Kiepskich",
       meta: [
@@ -21,7 +32,7 @@ export default defineNuxtConfig({
           content:
             'Odtwarzacz odcinków serialu "Świat według Kiepskich" z funkcją przycinania fragmentów.',
         },
-        { name: "theme-color", content: "#15803d" }, // Kolor motywu (green-700)
+        { name: "theme-color", content: "#15803d" },
         { property: "og:title", content: "Kiepski Odtwarzacz" },
         {
           property: "og:description",
@@ -36,4 +47,5 @@ export default defineNuxtConfig({
 
   modules: ["@nuxtjs/tailwindcss"],
   css: ["~/assets/css/main.css"],
+  compatibilityDate: "2025-03-27",
 });

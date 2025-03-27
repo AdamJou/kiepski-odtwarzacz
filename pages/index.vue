@@ -1,5 +1,16 @@
 <template>
   <div class="min-h-screen bg-layout flex flex-col">
+    <div
+      v-if="isGlobalLoading"
+      class="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 z-[9999] overflow-hidden"
+    >
+      <div
+        class="fixed top-0 left-0 w-full h-full flex items-center justify-center text-white text-2xl text-center overflow-hidden z-[9999]"
+      >
+        Zara kurde, noc jest kurde...
+      </div>
+    </div>
+
     <header class="bg-amber-800/80 shadow-md py-4">
       <div class="container mx-auto px-4">
         <h1 class="text-3xl md:text-4xl font-bold text-center">
@@ -21,7 +32,6 @@
       </div>
 
       <div v-else class="grid grid-cols-1 xl:grid-cols-12 gap-6">
-        <!-- Sekcja odtwarzacza - większa -->
         <div
           class="xl:col-span-8 bg-black/80 rounded-lg shadow-lg overflow-hidden"
         >
@@ -40,16 +50,20 @@
           </div>
         </div>
 
-        <!-- Sekcja wyboru odcinków - węższa -->
         <div
           class="xl:col-span-4 bg-black/80 rounded-lg shadow-lg overflow-hidden flex flex-col h-fit max-h-screen"
         >
           <div class="p-4 bg-amber-900/90 flex-shrink-0">
             <div class="flex items-center justify-between mb-4">
               <h2 class="text-xl font-semibold text-amber-100">
-                Dostępne Odcinki
+                Wpisz se nazwę odcinka, kurde!
               </h2>
-              <MagnifyingGlassIcon class="h-5 w-5 text-amber-300" />
+              <button
+                @click="addRandomEpisode"
+                class="bg-amber-700 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ml-2"
+              >
+                🎲 Losowy
+              </button>
             </div>
 
             <div class="relative mb-4">
@@ -114,6 +128,9 @@
 import { ref, computed, onMounted } from "vue";
 import { useEpisodes } from "../composables/useEpisodes";
 import { MagnifyingGlassIcon, PlusIcon } from "@heroicons/vue/24/outline";
+import { useState } from "nuxt/app";
+
+const isGlobalLoading = useState("globalLoading", () => false);
 
 const {
   episodes,
@@ -133,6 +150,19 @@ const filteredEpisodes = computed(() => {
   );
 });
 
+const addRandomEpisode = () => {
+  const availableEpisodes = episodes.value.filter(
+    (ep) => !playlist.value.some((p) => p.url === ep.url)
+  );
+
+  if (availableEpisodes.length === 0) return;
+
+  const randomIndex = Math.floor(Math.random() * availableEpisodes.length);
+  const randomEpisode = availableEpisodes[randomIndex];
+
+  addToPlaylist(randomEpisode);
+};
+
 const isInPlaylist = (episode: { url: string }) => {
   return playlist.value.some((e) => e.url === episode.url);
 };
@@ -143,11 +173,29 @@ onMounted(() => {
 </script>
 
 <style>
-.bg-layout {
-  background-image: url("/bg.jpeg");
-  background-size: cover;
-  background-position: center;
-  background-attachment: fixed;
+.slide-left-enter-active,
+.slide-left-leave-active {
+  transition: all 0.4s ease;
+  position: absolute;
+  width: 100%;
+}
+
+.slide-left-enter-from {
+  transform: translateX(100%);
+  opacity: 0;
+}
+.slide-left-enter-to {
+  transform: translateX(0%);
+  opacity: 1;
+}
+
+.slide-left-leave-from {
+  transform: translateX(0%);
+  opacity: 1;
+}
+.slide-left-leave-to {
+  transform: translateX(-100%);
+  opacity: 0;
 }
 
 .custom-scrollbar {

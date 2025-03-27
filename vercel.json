@@ -1,5 +1,12 @@
 {
   "framework": "nuxtjs",
   "buildCommand": "npm run build",
-  "outputDirectory": ".output/public"
+  "outputDirectory": ".output/public",
+  "redirects": [
+    {
+      "source": "/ffmpeg/(.*)",
+      "destination": "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.4/dist/esm/$1",
+      "permanent": false
+    }
+  ]
 }
