@@ -198,6 +198,8 @@ const isSnippetMode = ref(false);
 const isGeneratingThumbnails = ref(false);
 const thumbnailProgress = ref(0);
 
+let ffmpegInstance: FFmpeg | null = null;
+
 const {
   cacheThumbnails,
   getCachedThumbnails,
@@ -207,30 +209,37 @@ const {
 
 const initFFmpeg = async () => {
   try {
-    const ffmpegInstance = new FFmpeg();
-    console.log("Created FFmpeg instance");
+    console.log("[FFmpeg] Sprawdzam instancję...");
+
+    if (ffmpegInstance?.loaded) {
+      console.log("[FFmpeg] Już zainicjalizowane.");
+      return;
+    }
+
+    console.log("[FFmpeg] Tworzę nową instancję...");
+    ffmpegInstance = new FFmpeg();
 
     ffmpegInstance.on("log", ({ message }) => {
-      console.log("FFmpeg Log:", message);
+      console.log(`[FFmpeg LOG] ${message}`);
     });
 
     ffmpegInstance.on("progress", ({ progress: p }) => {
-      console.log("FFmpeg Progress:", p);
-      progress.value = Math.round(p * 100);
+      console.log(`[FFmpeg PROGRESS] ${Math.round(p * 100)}%`);
     });
 
-    console.log("Loading FFmpeg...");
+    console.log("[FFmpeg] Ładuję FFmpeg...");
+    await ffmpegInstance.load();
 
-    await ffmpegInstance.load({
-      coreURL: "/ffmpeg/ffmpeg-core.js",
-      wasmURL: "/ffmpeg/ffmpeg-core.wasm",
-      workerURL: "/ffmpeg/ffmpeg-core.worker.js",
-    });
-
-    console.log("FFmpeg loaded successfully");
+    if (ffmpegInstance.loaded) {
+      console.log("✅ FFmpeg załadowany pomyślnie!");
+    } else {
+      throw new Error(
+        "❌ FFmpeg nie został załadowany (brak `loaded = true`)."
+      );
+    }
   } catch (error) {
-    console.error("Error initializing FFmpeg:", error);
-    status.value = "Failed to initialize video processor. Please try again.";
+    console.error("[FFmpeg] ❌ Błąd inicjalizacji FFmpeg:", error);
+    status.value = "Błąd inicjalizacji FFmpeg – sprawdź konsolę i pliki.";
     throw error;
   }
 };
@@ -432,10 +441,9 @@ const downloadSnippet = async () => {
   try {
     isProcessing.value = true;
     progress.value = 0;
-    status.value =
-      "Ja jestem plikiem wielkiego formata, poczekaj aż sie przekonwertuje...";
+    status.value = "Przetwarzanie i konwersja do MP4...";
 
-    const video = previewVideo.value as any; // 👈 uciszamy TypeScript
+    const video = previewVideo.value as any;
     const width = video.videoWidth;
     const height = video.videoHeight;
 
@@ -443,30 +451,22 @@ const downloadSnippet = async () => {
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Unable to get canvas context");
+    if (!ctx) throw new Error("Canvas context error");
 
-    // Strumień z canvas
-    const canvasStream = (canvas as any).captureStream(30); // 👈 TS nie narzeka
-
-    // Strumień audio z wideo
-    const audioTracks = (video.captureStream() as any).getAudioTracks(); // 👈 TS fix
-
-    // Połącz audio + wideo
+    const canvasStream = (canvas as any).captureStream(30);
+    const audioTracks = (video.captureStream() as any).getAudioTracks();
     const mixedStream = new MediaStream([
       ...canvasStream.getVideoTracks(),
       ...audioTracks,
     ]);
 
-    // Inicjalizacja RecordRTC
     const recorder = new (RecordRTC as any)(mixedStream, {
       type: "video",
-      mimeType: "video/mp4", // Chrome i tak może dać webm
+      mimeType: "video/webm", // safer default
       bitsPerSecond: 8000000,
     });
 
     recorder.startRecording();
-
-    // Ustaw początek fragmentu
     video.currentTime = startTime.value;
     await video.play();
 
@@ -482,22 +482,48 @@ const downloadSnippet = async () => {
         requestAnimationFrame(updateFrame);
       } else {
         video.pause();
-        status.value = "Pobieranie...";
+        recorder.stopRecording(async () => {
+          const webmBlob = recorder.getBlob();
+          const webmData = new Uint8Array(await webmBlob.arrayBuffer());
 
-        recorder.stopRecording(() => {
-          const blob = recorder.getBlob();
-          const url = URL.createObjectURL(blob);
+          if (!ffmpegInstance?.loaded) {
+            status.value = "FFmpeg is not initialized!";
+            isProcessing.value = false;
+            return;
+          }
+
+          await ffmpegInstance.writeFile("input.webm", webmData);
+
+          await ffmpegInstance.exec([
+            "-i",
+            "input.webm",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "output.mp4",
+          ]);
+
+          const mp4Data = (await ffmpegInstance.readFile(
+            "output.mp4"
+          )) as Uint8Array;
+          const mp4Blob = new Blob([mp4Data], { type: "video/mp4" });
+
+          const url = URL.createObjectURL(mp4Blob);
           const a = document.createElement("a");
           a.href = url;
           a.download = `snippet_${formatTime(
             startTime.value,
             true
-          )}-${formatTime(endTime.value, true)}.${
-            blob.type.includes("mp4") ? "mp4" : "webm"
-          }`;
+          )}-${formatTime(endTime.value, true)}.mp4`;
           a.click();
           URL.revokeObjectURL(url);
 
+          status.value = "Gotowe!";
           isProcessing.value = false;
           progress.value = 100;
         });
@@ -506,8 +532,8 @@ const downloadSnippet = async () => {
 
     updateFrame();
   } catch (error) {
-    console.error("Error recording video snippet:", error);
-    status.value = "Recording failed.";
+    console.error("Error during snippet download:", error);
+    status.value = "Błąd konwersji lub pobierania.";
     isProcessing.value = false;
     progress.value = 0;
   }

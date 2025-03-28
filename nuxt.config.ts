@@ -8,6 +8,20 @@ export default defineNuxtConfig({
     preset: "vercel",
     serveStatic: true,
   },
+  vite: {
+    logLevel: "info",
+    build: {
+      rollupOptions: {
+        onwarn(warning, warn) {
+          console.log("ROLLUP WARNING:", warning); // loguje źródło błędnego importu
+          warn(warning);
+        },
+      },
+    },
+    optimizeDeps: {
+      exclude: ["@ffmpeg/core", "@ffmpeg/ffmpeg"], // na wszelki wypadek
+    },
+  },
 
   app: {
     baseURL: "/",
