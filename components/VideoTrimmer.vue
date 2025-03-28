@@ -1,23 +1,16 @@
 <template>
   <div class="video-trimmer">
-    <div class="back-button mb-2">
-      <button @click="goBack" class="action-btn">
-        <ArrowLeftIcon class="h-5 w-5 text-white" />
-        Powrót
-      </button>
-    </div>
-    <div class="preview-container" v-if="!isLoading">
+    <div class="preview-container">
       <video
         ref="previewVideo"
         class="preview-video"
-        :src="videoBlobUrl"
+        :src="videoUrl"
         @timeupdate="handleTimeUpdate"
         @loadedmetadata="handleMetadataLoaded"
         @error="(e) => console.error('Video error:', e)"
         @waiting="() => (isPlaying = false)"
         @playing="() => (isPlaying = true)"
         @pause="() => (isPlaying = false)"
-        @play="() => (isPlaying = true)"
         crossorigin="anonymous"
         preload="metadata"
       ></video>
@@ -31,12 +24,6 @@
           {{ formatTime(previewVideo?.duration || 0) }}
         </div>
       </div>
-    </div>
-    <div v-else class="processing-status">
-      <div class="progress-bar">
-        <div class="progress" :style="{ width: `${downloadProgress}%` }"></div>
-      </div>
-      <p>Ładowanie wideo... {{ downloadProgress }}%</p>
     </div>
 
     <div v-if="isGeneratingThumbnails" class="processing-status">
@@ -174,28 +161,34 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from "vue";
-
+import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { fetchFile } from "@ffmpeg/util";
+import { toBlobURL } from "@ffmpeg/util";
 import { useEpisodes } from "../composables/useEpisodes";
+import * as ZapparVideoRecorder from "@zappar/video-recorder";
+
 import {
   PlayIcon,
   PauseIcon,
   EyeIcon,
   ArrowDownTrayIcon,
-  ArrowLeftIcon,
   ClockIcon,
   XMarkIcon,
   ScissorsIcon,
 } from "@heroicons/vue/24/outline";
-import { useRouter } from "vue-router";
-import { useState } from "nuxt/app";
-const videoBlobUrl = ref("");
-const isLoading = ref(false);
-const downloadProgress = ref(0);
 
-const videoUrl = ref("");
-const duration = ref(0);
-const previewVideo = ref<any>(null);
+const props = defineProps<{
+  videoUrl: string;
+  duration: number;
+}>();
+
+const startTime = ref(0);
+const endTime = ref(0);
 const currentTime = ref(0);
+const isProcessing = ref(false);
+const progress = ref(0);
+const status = ref("");
+const previewVideo = ref<HTMLVideoElement | null>(null);
 const isPlaying = ref(false);
 const thumbnails = ref<string[]>([]);
 const numThumbnails = 20;
@@ -205,18 +198,6 @@ const isSnippetMode = ref(false);
 const isGeneratingThumbnails = ref(false);
 const thumbnailProgress = ref(0);
 
-const startTime = ref(0);
-const endTime = ref(0);
-
-const isProcessing = ref(false);
-const progress = ref(0);
-const status = ref("");
-
-import { useRoute } from "vue-router";
-
-const route = useRoute();
-const router = useRouter();
-
 const {
   cacheThumbnails,
   getCachedThumbnails,
@@ -224,107 +205,57 @@ const {
   getEpisodeMetadata,
 } = useEpisodes();
 
-const isGlobalLoading = useState("globalLoading", () => false);
-
-const goBack = async () => {
-  isGlobalLoading.value = true;
-  router.replace("/").then(() => {
-    setTimeout(() => {
-      window.location.reload();
-    }, 2000);
-  });
-};
-
-onMounted(async () => {
-  const queryUrl = route.query.url;
-  const queryDuration = route.query.duration;
-
-  const alreadyRefreshed = sessionStorage.getItem("refreshed-on-trim");
-  /*
-  if (!alreadyRefreshed) {
-    sessionStorage.setItem("refreshed-on-trim", "true");
-
-    setTimeout(() => {
-      window.location.reload();
-    }, 1000);
-  }
-    */
-
-  if (typeof queryUrl === "string") {
-    videoUrl.value = queryUrl;
-    await loadFullVideo();
-  }
-
-  if (typeof queryDuration === "string") {
-    duration.value = parseFloat(queryDuration);
-  }
-
-  console.log("[Trimmer] Odebrano z query:", videoUrl.value, duration.value);
-});
-
-const loadFullVideo = async () => {
-  isLoading.value = true;
-  downloadProgress.value = 0;
-
+const initFFmpeg = async () => {
   try {
-    const res = await fetch(videoUrl.value);
-    const reader = res.body?.getReader();
-    const contentLength = parseInt(res.headers.get("Content-Length") || "0");
+    const ffmpegInstance = new FFmpeg();
+    console.log("Created FFmpeg instance");
 
-    let received = 0;
-    const chunks: Uint8Array[] = [];
+    ffmpegInstance.on("log", ({ message }) => {
+      console.log("FFmpeg Log:", message);
+    });
 
-    if (reader) {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          chunks.push(value);
-          received += value.length;
+    ffmpegInstance.on("progress", ({ progress: p }) => {
+      console.log("FFmpeg Progress:", p);
+      progress.value = Math.round(p * 100);
+    });
 
-          if (contentLength > 0) {
-            downloadProgress.value = Math.round(
-              (received / contentLength) * 100
-            );
-          }
-        }
-      }
-    }
+    console.log("Loading FFmpeg...");
 
-    const blob = new Blob(chunks, { type: "video/mp4" });
-    videoBlobUrl.value = URL.createObjectURL(blob);
-  } catch (err) {
-    console.error("Błąd pobierania wideo:", err);
-  } finally {
-    isLoading.value = false;
-  }
-};
+    await ffmpegInstance.load({
+      coreURL: "/ffmpeg/ffmpeg-core.js",
+      wasmURL: "/ffmpeg/ffmpeg-core.wasm",
+      workerURL: "/ffmpeg/ffmpeg-core.worker.js",
+    });
 
-const seekToTime = (time: number) => {
-  if (!previewVideo.value || isNaN(time)) return;
-
-  try {
-    const validTime = Math.max(0, Math.min(time, previewVideo.value.duration));
-    previewVideo.value.currentTime = validTime;
+    console.log("FFmpeg loaded successfully");
   } catch (error) {
-    console.error("Seek error:", error);
+    console.error("Error initializing FFmpeg:", error);
+    status.value = "Failed to initialize video processor. Please try again.";
+    throw error;
   }
 };
 
-watch(videoUrl, (newVal) => {
-  console.log("videoUrl SET TO:", newVal);
-});
+const formatTime = (seconds: number, showDecimals = false) => {
+  if (isNaN(seconds) || !isFinite(seconds)) return "00:00";
 
-watch(videoUrl, (val) => {
-  if (val && previewVideo.value?.readyState >= 2) {
-    generateThumbnails();
+  const mins = Math.floor(Math.max(0, seconds) / 60);
+  const secs = Math.max(0, seconds) % 60;
+
+  if (showDecimals) {
+    return `${String(mins).padStart(2, "0")}:${secs
+      .toFixed(2)
+      .padStart(5, "0")}`;
   }
-});
+
+  return `${String(mins).padStart(2, "0")}:${Math.round(secs)
+    .toString()
+    .padStart(2, "0")}`;
+};
 
 const generateThumbnails = async () => {
   if (!previewVideo.value) return;
 
-  const cachedThumbnails = getCachedThumbnails(videoUrl.value);
+  const cachedThumbnails = getCachedThumbnails(props.videoUrl);
   if (cachedThumbnails && cachedThumbnails.length > 0) {
     thumbnails.value = [...cachedThumbnails];
     return;
@@ -343,9 +274,9 @@ const generateThumbnails = async () => {
   canvas.width = 160;
   canvas.height = 90;
 
-  const newThumbs: string[] = [];
+  const newThumbnails: string[] = [];
   const wasPlaying = isPlaying.value;
-  const currentPlaybackTime = previewVideo.value?.currentTime || 0;
+  const currentPlaybackTime = previewVideo.value.currentTime;
 
   if (isPlaying.value) {
     await previewVideo.value.pause();
@@ -353,8 +284,8 @@ const generateThumbnails = async () => {
   }
 
   const batchSize = 5;
-  const videoDur = previewVideo.value.duration || 0;
-  const interval = videoDur / (numThumbnails - 1);
+  const duration = previewVideo.value?.duration || 0;
+  const interval = duration / (numThumbnails - 1);
 
   for (let batch = 0; batch < numThumbnails; batch += batchSize) {
     const batchPromises: Promise<string>[] = [];
@@ -366,10 +297,10 @@ const generateThumbnails = async () => {
       batchPromises.push(
         (async () => {
           try {
-            if (Number.isFinite(time)) {
+            if (previewVideo.value && Number.isFinite(time)) {
               previewVideo.value.currentTime = time;
               await new Promise((resolve) => {
-                previewVideo.value.addEventListener("seeked", resolve, {
+                previewVideo.value!.addEventListener("seeked", resolve, {
                   once: true,
                 });
               });
@@ -385,28 +316,93 @@ const generateThumbnails = async () => {
           } catch (error) {
             console.error("Error generating thumbnail:", error);
           }
-          return "data:image/jpeg,...";
+          return "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDABQODxIPDRQSEBIXFRQdHx4eHRoaHSQtJSAyVC08MTY3LjIyOUFTRjo/Tj4yMkhiSk46NjU1PVBVXWRkXWyEhIf/2wBDARUXFx4aHjshITtBNkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUH/wAARCAAIAAoDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAb/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k=";
         })()
       );
     }
 
-    const results = await Promise.all(batchPromises);
-    newThumbs.push(...results);
-    thumbnails.value = [...newThumbs];
+    const batchResults = await Promise.all(batchPromises);
+    newThumbnails.push(...batchResults);
+    thumbnails.value = [...newThumbnails];
     thumbnailProgress.value = Math.round(
-      (newThumbs.length / numThumbnails) * 100
+      (newThumbnails.length / numThumbnails) * 100
     );
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  cacheThumbnails(videoUrl.value, newThumbs);
+  cacheThumbnails(props.videoUrl, newThumbnails);
 
-  previewVideo.value.currentTime = currentPlaybackTime;
-  if (wasPlaying) {
-    await previewVideo.value.play();
-    isPlaying.value = true;
+  if (previewVideo.value && Number.isFinite(currentPlaybackTime)) {
+    previewVideo.value.currentTime = currentPlaybackTime;
+    if (wasPlaying) {
+      await previewVideo.value.play();
+      isPlaying.value = true;
+    }
   }
 
   isGeneratingThumbnails.value = false;
+};
+
+const handleMetadataLoaded = () => {
+  if (!previewVideo.value) return;
+
+  const videoDur = previewVideo.value.duration;
+  if (!videoDur || isNaN(videoDur)) return;
+
+  cacheEpisodeMetadata(props.videoUrl, videoDur);
+
+  startTime.value = 0;
+  endTime.value = videoDur;
+
+  setTimeout(() => {
+    if (previewVideo.value && previewVideo.value.readyState >= 2) {
+      generateThumbnails();
+    }
+  }, 500);
+};
+
+const handleTimeUpdate = () => {
+  if (!previewVideo.value || isNaN(previewVideo.value.currentTime)) return;
+
+  currentTime.value = previewVideo.value.currentTime;
+
+  if (previewVideo.value.currentTime >= endTime.value) {
+    previewVideo.value.pause();
+    isPlaying.value = false;
+  }
+};
+
+const togglePlayback = async () => {
+  if (!previewVideo.value) return;
+
+  try {
+    if (isPlaying.value) {
+      await previewVideo.value.pause(); // Nie zmieniaj isPlaying ręcznie
+    } else {
+      await previewVideo.value.play(); // Nie zmieniaj isPlaying ręcznie
+    }
+  } catch (error) {
+    console.error("Playback error:", error);
+  }
+};
+
+const seekToTime = (time: number) => {
+  if (!previewVideo.value || isNaN(time)) return;
+
+  try {
+    const validTime = Math.max(0, Math.min(time, previewVideo.value.duration));
+    previewVideo.value.currentTime = validTime;
+  } catch (error) {
+    console.error("Seek error:", error);
+  }
+};
+
+const seekToStart = () => {
+  seekToTime(startTime.value);
+};
+
+const seekToEnd = () => {
+  seekToTime(endTime.value);
 };
 
 const handleStartChange = () => {
@@ -419,26 +415,115 @@ const handleEndChange = () => {
   previewVideo.value.currentTime = endTime.value;
 };
 
-const adjustStartTime = (adjustment: number) => {
+const previewSnippet = async () => {
   if (!previewVideo.value) return;
-  const newTime = startTime.value + adjustment;
-  if (newTime >= 0 && newTime < endTime.value) {
-    startTime.value = Number(newTime.toFixed(2));
-    previewVideo.value.currentTime = startTime.value;
+  previewVideo.value.currentTime = startTime.value;
+  previewVideo.value.play();
+  isPlaying.value = true;
+};
+
+import { createCanvasVideoRecorder } from "@zappar/video-recorder";
+
+import RecordRTC from "recordrtc";
+
+const downloadSnippet = async () => {
+  if (!previewVideo.value || isProcessing.value) return;
+
+  try {
+    isProcessing.value = true;
+    progress.value = 0;
+    status.value =
+      "Ja jestem plikiem wielkiego formata, poczekaj aż sie przekonwertuje...";
+
+    const video = previewVideo.value as any; // 👈 uciszamy TypeScript
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Unable to get canvas context");
+
+    // Strumień z canvas
+    const canvasStream = (canvas as any).captureStream(30); // 👈 TS nie narzeka
+
+    // Strumień audio z wideo
+    const audioTracks = (video.captureStream() as any).getAudioTracks(); // 👈 TS fix
+
+    // Połącz audio + wideo
+    const mixedStream = new MediaStream([
+      ...canvasStream.getVideoTracks(),
+      ...audioTracks,
+    ]);
+
+    // Inicjalizacja RecordRTC
+    const recorder = new (RecordRTC as any)(mixedStream, {
+      type: "video",
+      mimeType: "video/mp4", // Chrome i tak może dać webm
+      bitsPerSecond: 8000000,
+    });
+
+    recorder.startRecording();
+
+    // Ustaw początek fragmentu
+    video.currentTime = startTime.value;
+    await video.play();
+
+    const updateFrame = () => {
+      const current = video.currentTime;
+      const percent =
+        ((current - startTime.value) / (endTime.value - startTime.value)) * 100;
+      progress.value = Math.min(100, percent);
+
+      ctx.drawImage(video, 0, 0, width, height);
+
+      if (current < endTime.value) {
+        requestAnimationFrame(updateFrame);
+      } else {
+        video.pause();
+        status.value = "Pobieranie...";
+
+        recorder.stopRecording(() => {
+          const blob = recorder.getBlob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `snippet_${formatTime(
+            startTime.value,
+            true
+          )}-${formatTime(endTime.value, true)}.${
+            blob.type.includes("mp4") ? "mp4" : "webm"
+          }`;
+          a.click();
+          URL.revokeObjectURL(url);
+
+          isProcessing.value = false;
+          progress.value = 100;
+        });
+      }
+    };
+
+    updateFrame();
+  } catch (error) {
+    console.error("Error recording video snippet:", error);
+    status.value = "Recording failed.";
+    isProcessing.value = false;
+    progress.value = 0;
   }
 };
 
-const adjustEndTime = (adjustment: number) => {
-  if (!previewVideo.value) return;
-  const newTime = endTime.value + adjustment;
-  if (
-    newTime > startTime.value &&
-    newTime <= (previewVideo.value.duration || 0)
-  ) {
-    endTime.value = Number(newTime.toFixed(2));
-    previewVideo.value.currentTime = endTime.value;
+watch(startTime, (newValue) => {
+  if (newValue >= endTime.value) {
+    startTime.value = endTime.value - 1;
   }
-};
+});
+
+watch(endTime, (newValue) => {
+  if (newValue <= startTime.value) {
+    endTime.value = startTime.value + 1;
+  }
+});
 
 const toggleSnippetMode = () => {
   isSnippetMode.value = !isSnippetMode.value;
@@ -448,205 +533,55 @@ const toggleSnippetMode = () => {
       currentTime.value + 30,
       previewVideo.value.duration
     );
-    const cache = getCachedThumbnails(videoUrl.value);
-    if (!cache) {
+    if (!getCachedThumbnails(props.videoUrl)) {
       generateThumbnails();
     } else {
-      thumbnails.value = cache;
+      thumbnails.value = getCachedThumbnails(props.videoUrl)!;
     }
   }
 };
 
-const previewSnippet = async () => {
-  if (!previewVideo.value) return;
-  previewVideo.value.currentTime = startTime.value;
-  previewVideo.value.play();
-  isPlaying.value = true;
-};
+const adjustStartTime = (adjustment: number) => {
+  if (!previewVideo.value || isNaN(adjustment)) return;
 
-const currentTimeUpdate = () => {
-  if (!previewVideo.value || isNaN(previewVideo.value.currentTime)) return;
-  currentTime.value = previewVideo.value.currentTime;
-  if (previewVideo.value.currentTime >= endTime.value) {
-    previewVideo.value.pause();
-    isPlaying.value = false;
-  }
-};
-
-const handleTimeUpdate = currentTimeUpdate;
-
-const togglePlayback = async () => {
-  if (!previewVideo.value) return;
-  try {
-    if (isPlaying.value) {
-      await previewVideo.value.pause();
-    } else {
-      await previewVideo.value.play();
-    }
-  } catch (error) {
-    console.error("Playback error:", error);
-  }
-};
-
-const formatTime = (secs: number, showDecimals = false) => {
-  if (isNaN(secs) || !isFinite(secs)) return "00:00";
-  const mins = Math.floor(secs / 60);
-  const s = secs % 60;
-  if (showDecimals) {
-    return `${String(mins).padStart(2, "0")}:${s.toFixed(2).padStart(5, "0")}`;
-  }
-  return `${String(mins).padStart(2, "0")}:${Math.round(s)
-    .toString()
-    .padStart(2, "0")}`;
-};
-
-const handleMetadataLoaded = () => {
-  if (!previewVideo.value) return;
-  const vidDur = previewVideo.value.duration;
-  if (!vidDur || isNaN(vidDur)) return;
-  cacheEpisodeMetadata(videoUrl.value, vidDur);
-  startTime.value = 0;
-  endTime.value = vidDur;
-  setTimeout(() => {
-    if (previewVideo.value && previewVideo.value.readyState >= 2) {
-      generateThumbnails();
-    }
-  }, 500);
-};
-
-import { createFFmpeg, fetchFile } from "@ffmpeg/ffmpeg";
-const ffmpeg = createFFmpeg({
-  log: true,
-  corePath: "/ffmpeg-core/ffmpeg-core.js",
-  singleThread: true,
-} as any);
-
-const downloadSnippet = async () => {
-  if (!previewVideo.value || isProcessing.value) return;
-  try {
-    isProcessing.value = true;
-    progress.value = 0;
-    status.value = "Rozpoczynam nagrywanie...";
-
-    const webmH264 = "video/webm; codecs=h264";
-    const mp4Mime = "video/mp4; codecs=avc1.42E01E, mp4a.40.2";
-    let chosenMime = "";
-    if (MediaRecorder.isTypeSupported(mp4Mime)) {
-      chosenMime = mp4Mime;
-    } else if (MediaRecorder.isTypeSupported(webmH264)) {
-      chosenMime = webmH264;
-    } else {
-      throw new Error(
-        "Brak wsparcia dla wymaganych formatów (MP4/WebM H.264)."
-      );
-    }
-
-    const stream = previewVideo.value.captureStream();
-    const recorder = new MediaRecorder(stream, {
-      mimeType: chosenMime,
-      videoBitsPerSecond: 5_000_000,
-    });
-
-    const chunks: Blob[] = [];
-    recorder.ondataavailable = (evt: BlobEvent) => {
-      if (evt.data.size > 0) chunks.push(evt.data);
-    };
-
-    recorder.onstop = async () => {
-      const finalBlob = new Blob(chunks, { type: chosenMime });
-      console.log("Final Blob size:", finalBlob.size);
-      if (finalBlob.size === 0) {
-        status.value = "Błąd: Brak danych w nagraniu.";
-        isProcessing.value = false;
-        return;
-      }
-
-      if (!ffmpeg.isLoaded()) {
-        await ffmpeg.load();
-      }
-
-      const inputFilename = chosenMime.includes("mp4")
-        ? "input.mp4"
-        : "input.webm";
-      status.value =
-        "Ja jestem plikiem wielkiego formata, poczekaj aż sie przekonwertuje...";
-
-      ffmpeg.FS("writeFile", inputFilename, await fetchFile(finalBlob));
-      await ffmpeg.run(
-        "-i",
-        inputFilename,
-        "-c:v",
-        "libx264",
-        "-c:a",
-        "aac",
-        "-movflags",
-        "+faststart",
-        "output.mp4"
-      );
-
-      const data = ffmpeg.FS("readFile", "output.mp4");
-
-      const convertedBlob = new Blob([data.buffer], { type: "video/mp4" });
-      console.log("Converted Blob size:", convertedBlob.size);
-      if (convertedBlob.size === 0) {
-        status.value = "Błąd konwersji: Wygenerowany plik ma 0 bajtów.";
-        isProcessing.value = false;
-        return;
-      }
-
-      const filename = `snippet_${formatTime(
-        startTime.value,
-        true
-      )}-${formatTime(endTime.value, true)}.mp4`;
-      const url = URL.createObjectURL(convertedBlob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      progress.value = 100;
-      status.value = "Gotowe! Plik zapisany jako MP4";
-      isProcessing.value = false;
-    };
-
-    recorder.start();
-    previewVideo.value.currentTime = startTime.value;
-    await previewVideo.value.play();
-
-    function checkProgress() {
-      if (!previewVideo.value) return;
-      const cur = previewVideo.value.currentTime;
-      const clipDur = endTime.value - startTime.value;
-      const ratio = (cur - startTime.value) / clipDur;
-      progress.value = Math.min(100, Math.max(0, ratio * 100));
-      if (cur >= endTime.value) {
-        previewVideo.value.pause();
-        recorder.stop();
-      } else {
-        requestAnimationFrame(checkProgress);
-      }
-    }
-    requestAnimationFrame(checkProgress);
-  } catch (err) {
-    console.error("Błąd przy nagrywaniu:", err);
-    status.value = "Wystąpił błąd. Szczegóły w konsoli.";
-    isProcessing.value = false;
-    progress.value = 0;
+  const newTime = startTime.value + adjustment;
+  if (newTime >= 0 && newTime < endTime.value) {
+    startTime.value = Number(newTime.toFixed(2));
     if (previewVideo.value) {
-      previewVideo.value.pause();
+      try {
+        previewVideo.value.currentTime = startTime.value;
+      } catch (error) {
+        console.error("Error adjusting start time:", error);
+      }
     }
   }
 };
 
-watch(startTime, (newVal) => {
-  if (newVal >= endTime.value) {
-    startTime.value = endTime.value - 1;
+const adjustEndTime = (adjustment: number) => {
+  if (!previewVideo.value || isNaN(adjustment)) return;
+
+  const newTime = endTime.value + adjustment;
+  if (
+    newTime > startTime.value &&
+    newTime <= (previewVideo.value?.duration || 0)
+  ) {
+    endTime.value = Number(newTime.toFixed(2));
+    if (previewVideo.value) {
+      try {
+        previewVideo.value.currentTime = endTime.value;
+      } catch (error) {
+        console.error("Error adjusting end time:", error);
+      }
+    }
   }
-});
-watch(endTime, (newVal) => {
-  if (newVal <= startTime.value) {
-    endTime.value = startTime.value + 1;
+};
+
+onMounted(async () => {
+  console.log("Component mounted, initializing FFmpeg");
+  try {
+    await initFFmpeg();
+  } catch (error) {
+    console.error("Failed to initialize FFmpeg on mount:", error);
   }
 });
 
