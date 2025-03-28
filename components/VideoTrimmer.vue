@@ -165,6 +165,8 @@ import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
 import { toBlobURL } from "@ffmpeg/util";
 import { useEpisodes } from "../composables/useEpisodes";
+import * as ZapparVideoRecorder from "@zappar/video-recorder";
+
 import {
   PlayIcon,
   PauseIcon,
@@ -375,17 +377,12 @@ const togglePlayback = async () => {
 
   try {
     if (isPlaying.value) {
-      await previewVideo.value.pause();
+      await previewVideo.value.pause(); // Nie zmieniaj isPlaying ręcznie
     } else {
-      const playPromise = previewVideo.value.play();
-      if (playPromise !== undefined) {
-        await playPromise;
-      }
+      await previewVideo.value.play(); // Nie zmieniaj isPlaying ręcznie
     }
-    isPlaying.value = !isPlaying.value;
   } catch (error) {
     console.error("Playback error:", error);
-    isPlaying.value = false;
   }
 };
 
@@ -425,96 +422,94 @@ const previewSnippet = async () => {
   isPlaying.value = true;
 };
 
+import { createCanvasVideoRecorder } from "@zappar/video-recorder";
+
+import RecordRTC from "recordrtc";
+
 const downloadSnippet = async () => {
   if (!previewVideo.value || isProcessing.value) return;
 
   try {
     isProcessing.value = true;
     progress.value = 0;
-    status.value = "Preparing video...";
+    status.value =
+      "Ja jestem plikiem wielkiego formata, poczekaj aż sie przekonwertuje...";
 
-    const videoWidth = previewVideo.value.videoWidth;
-    const videoHeight = previewVideo.value.videoHeight;
+    const video = previewVideo.value as any; // 👈 uciszamy TypeScript
+    const width = video.videoWidth;
+    const height = video.videoHeight;
 
     const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext("2d");
-    canvas.width = videoWidth;
-    canvas.height = videoHeight;
+    if (!ctx) throw new Error("Unable to get canvas context");
 
-    const stream = canvas.captureStream(30);
-    const videoTrack = (
-      previewVideo.value as HTMLVideoElement & {
-        captureStream: () => MediaStream;
-      }
-    )
-      .captureStream()
-      .getVideoTracks()[0];
+    // Strumień z canvas
+    const canvasStream = (canvas as any).captureStream(30); // 👈 TS nie narzeka
 
-    const [track] = stream.getVideoTracks();
-    stream.removeTrack(track);
-    stream.addTrack(videoTrack);
+    // Strumień audio z wideo
+    const audioTracks = (video.captureStream() as any).getAudioTracks(); // 👈 TS fix
 
-    const mediaRecorder = new MediaRecorder(stream, {
-      mimeType: "video/webm;codecs=h264",
-      videoBitsPerSecond: 8000000,
+    // Połącz audio + wideo
+    const mixedStream = new MediaStream([
+      ...canvasStream.getVideoTracks(),
+      ...audioTracks,
+    ]);
+
+    // Inicjalizacja RecordRTC
+    const recorder = new (RecordRTC as any)(mixedStream, {
+      type: "video",
+      mimeType: "video/mp4", // Chrome i tak może dać webm
+      bitsPerSecond: 8000000,
     });
 
-    const chunks: Blob[] = [];
+    recorder.startRecording();
 
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        chunks.push(event.data);
-      }
-    };
+    // Ustaw początek fragmentu
+    video.currentTime = startTime.value;
+    await video.play();
 
-    mediaRecorder.onstop = () => {
-      const blob = new Blob(chunks, { type: "video/webm" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `trimmed_${formatTime(startTime.value, true)}-${formatTime(
-        endTime.value,
-        true
-      )}.webm`;
-      a.click();
-      URL.revokeObjectURL(url);
+    const updateFrame = () => {
+      const current = video.currentTime;
+      const percent =
+        ((current - startTime.value) / (endTime.value - startTime.value)) * 100;
+      progress.value = Math.min(100, percent);
 
-      status.value = "Download complete!";
-      isProcessing.value = false;
-      progress.value = 100;
-    };
+      ctx.drawImage(video, 0, 0, width, height);
 
-    mediaRecorder.start();
-    status.value = "Recording...";
-
-    previewVideo.value.currentTime = startTime.value;
-    await previewVideo.value.play();
-
-    const updateProgress = () => {
-      if (!previewVideo.value) return;
-      const currentProgress =
-        ((previewVideo.value.currentTime - startTime.value) /
-          (endTime.value - startTime.value)) *
-        100;
-      progress.value = Math.min(100, Math.max(0, currentProgress));
-
-      if (previewVideo.value.currentTime < endTime.value) {
-        requestAnimationFrame(updateProgress);
+      if (current < endTime.value) {
+        requestAnimationFrame(updateFrame);
       } else {
-        mediaRecorder.stop();
-        previewVideo.value.pause();
+        video.pause();
+        status.value = "Pobieranie...";
+
+        recorder.stopRecording(() => {
+          const blob = recorder.getBlob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `snippet_${formatTime(
+            startTime.value,
+            true
+          )}-${formatTime(endTime.value, true)}.${
+            blob.type.includes("mp4") ? "mp4" : "webm"
+          }`;
+          a.click();
+          URL.revokeObjectURL(url);
+
+          isProcessing.value = false;
+          progress.value = 100;
+        });
       }
     };
 
-    updateProgress();
+    updateFrame();
   } catch (error) {
-    console.error("Error processing video:", error);
-    status.value = "Error processing video. Please try again.";
+    console.error("Error recording video snippet:", error);
+    status.value = "Recording failed.";
     isProcessing.value = false;
     progress.value = 0;
-    if (previewVideo.value) {
-      previewVideo.value.pause();
-    }
   }
 };
 

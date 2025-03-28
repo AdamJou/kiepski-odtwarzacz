@@ -67,7 +67,9 @@
       v-if="showTrimmer && currentVideo && videoDuration > 0"
       class="trimmer-container bg-black/60 rounded-lg p-3 mb-6"
     >
-      <VideoTrimmer :videoUrl="currentVideo.url" :duration="videoDuration" />
+      <client-only>
+        <VideoTrimmer :videoUrl="currentVideo.url" :duration="videoDuration" />
+      </client-only>
     </div>
 
     <div class="mt-4 bg-black rounded-lg p-4">
