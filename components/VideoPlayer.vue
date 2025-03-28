@@ -23,7 +23,12 @@
         @error="handleVideoError"
         preload="metadata"
       >
-        <source v-if="currentVideo" :src="currentVideo.url" type="video/mp4" />
+        <source
+          v-if="currentVideo?.url"
+          :src="currentVideo.url"
+          type="video/mp4"
+        />
+
         <p v-else class="text-amber-100 text-center p-4">
           Twoja przeglądarka nie obsługuje odtwarzania wideo.
         </p>
@@ -54,12 +59,11 @@
         </button>
       </div>
       <button
-        @click="toggleTrimmer"
+        @click="goToTrimmer"
         :disabled="!currentVideo"
         class="control-button trim-button"
       >
-        <span class="mr-1">✂️</span>
-        {{ showTrimmer ? "Ukryj trimmer" : "Przytnij" }}
+        <span class="mr-1">✂️</span> Przytnij
       </button>
     </div>
 
@@ -71,6 +75,7 @@
         <VideoTrimmer :videoUrl="currentVideo.url" :duration="videoDuration" />
       </client-only>
     </div>
+
 
     <div class="mt-4 bg-black rounded-lg p-4">
       <h3 class="text-lg font-semibold text-amber-300 mb-3">
@@ -113,10 +118,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
-import VideoTrimmer from "./VideoTrimmer.vue";
+import { ref, onMounted, watch, computed } from "vue";
 import { useEpisodes } from "../composables/useEpisodes";
-
+import { useState } from "nuxt/app";
 interface Episode {
   title: string;
   url: string;
@@ -130,6 +134,10 @@ const emit = defineEmits<{
   (e: "remove", episode: Episode): void;
 }>();
 
+const editorIframe = ref<HTMLIFrameElement | null>(null);
+
+const isTrimmingLoading = useState("isTrimmingLoading", () => false);
+
 const videoPlayer = ref<HTMLVideoElement | null>(null);
 const currentIndex = ref(0);
 const currentVideo = ref<Episode | null>(null);
@@ -140,11 +148,53 @@ const videoLoaded = ref(false);
 
 const { getEpisodeMetadata, cacheEpisodeMetadata } = useEpisodes();
 
-const toggleTrimmer = () => {
-  showTrimmer.value = !showTrimmer.value;
+import { useRouter } from "vue-router";
+const router = useRouter();
 
-  if (showTrimmer.value && videoPlayer.value) {
-    videoPlayer.value.pause();
+const goToTrimmer = async () => {
+  if (!currentVideo.value || !videoDuration.value) return;
+
+  const audio = new Audio("/route.mp3");
+  sessionStorage.removeItem("refreshed-on-trim");
+
+  const userConfirmed = confirm(
+    "Przycinanie powoduje zresetowanie playlisty, czy na pewno chcesz to zrobić?"
+  );
+  if (!userConfirmed) return;
+  try {
+    await audio.play();
+    setTimeout(() => {
+      const proxyUrl = `/api/proxy-trim-video?url=${encodeURIComponent(
+        currentVideo.value!.url
+      )}`;
+
+      isTrimmingLoading.value = true;
+
+      router
+        .push({
+          path: "/trim",
+          query: {
+            url: proxyUrl,
+            duration: videoDuration.value!.toString(),
+          },
+        })
+        .then(() => {
+          setTimeout(() => {
+            window.location.reload();
+          }, 2000);
+        });
+    }, 250);
+  } catch (err) {
+    console.warn("Could not play sound:", err);
+    router.push({
+      path: "/trim",
+      query: {
+        url: `/api/proxy-trim-video?url=${encodeURIComponent(
+          currentVideo.value.url
+        )}`,
+        duration: videoDuration.value.toString(),
+      },
+    });
   }
 };
 
@@ -248,6 +298,49 @@ watch(
   },
   { deep: true }
 );
+
+watch(showTrimmer, (visible) => {
+  if (
+    visible &&
+    currentVideo.value &&
+    videoDuration.value &&
+    editorIframe.value?.contentWindow
+  ) {
+    editorIframe.value.contentWindow.postMessage(
+      {
+        type: "load-video",
+        url: currentVideo.value.url,
+        duration: videoDuration.value,
+      },
+      "*"
+    );
+  }
+});
+
+const sendVideoToEditor = () => {
+  if (
+    showTrimmer.value &&
+    currentVideo.value &&
+    videoDuration.value &&
+    editorIframe.value?.contentWindow
+  ) {
+    console.log("[Player] Wysyłam do iframe:", currentVideo.value.url);
+    editorIframe.value.contentWindow.postMessage(
+      {
+        type: "load-video",
+        url: `/api/proxy-trim-video?url=${encodeURIComponent(
+          currentVideo.value.url
+        )}`,
+        duration: videoDuration.value,
+      },
+      "*"
+    );
+  }
+};
+
+watch([currentVideo, videoDuration], () => {
+  sendVideoToEditor();
+});
 
 onMounted(() => {
   if (props.playlist.length > 0) {

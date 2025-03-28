@@ -17,7 +17,9 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/core": "^0.8.5",
+    "@ffmpeg/core-mt": "^0.12.9",
+    "@ffmpeg/ffmpeg": "^0.9.8",
     "@ffmpeg/util": "^0.12.2",
     "@heroicons/vue": "^2.1.1",
     "@zappar/video-recorder": "^1.0.1",
@@ -33,6 +35,7 @@
     "canvas": "^3.1.0",
     "jsdom": "^26.0.0",
     "typescript": "^5.3.3",
+    "vite-plugin-cross-origin-isolation": "^0.1.6",
     "vitest": "^1.2.2"
   }
 }
