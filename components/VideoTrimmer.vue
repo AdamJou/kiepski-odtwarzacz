@@ -463,7 +463,7 @@ const downloadSnippet = async () => {
     const recorder = new (RecordRTC as any)(mixedStream, {
       type: "video",
       mimeType: "video/webm", // safer default
-      bitsPerSecond: 8000000,
+      //bitsPerSecond: 8000000,
     });
 
     recorder.startRecording();
